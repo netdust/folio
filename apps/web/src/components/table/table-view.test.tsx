@@ -452,91 +452,11 @@ describe('TableView', () => {
     });
   });
 
-  it('does NOT auto-save filter changes to the default view when no ?view= is in the URL', async () => {
-    // Default view carries a saved status filter. Hydration will fill ?status=todo
-    // into the URL on first paint. User removes the chip → onClauseChange fires
-    // with no urlViewId. Expected: the default view is NOT mutated.
-    const defaultView = {
-      ...viewRow,
-      id: 'v-default',
-      slug: 'all',
-      name: 'All',
-      isDefault: true,
-      filters: { status: 'todo' },
-    };
-
-    const updateViewCalls: Array<{ id: string; patch: Record<string, unknown> }> = [];
-
-    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
-      const u = String(url);
-      const method = init?.method ?? 'GET';
-      if (u.includes('/statuses') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/fields') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/views') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [defaultView] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.match(/\/views\/v-default/) && method === 'PATCH') {
-        const body = await (init?.body instanceof ReadableStream
-          ? new Response(init.body).text()
-          : Promise.resolve(String(init?.body ?? '{}')));
-        updateViewCalls.push({ id: 'v-default', patch: JSON.parse(body) });
-        return new Response(JSON.stringify(defaultView), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/documents') && method === 'GET') {
-        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    // No ?view= in URL: user has not explicitly opened the default view.
-    const { queryClient, router } = setup('/w/acme/p/web/work-items');
-    render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>,
-    );
-
-    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
-
-    // Hydration populates the chip from the default view's saved filter.
-    const removeBtn = await screen.findByRole('button', { name: /Remove status filter/i });
-    await act(async () => {
-      fireEvent.click(removeBtn);
-    });
-
-    // onClauseChange always navigates (dropping the status param) BEFORE the
-    // guarded autosave decision. Awaiting the router reflecting that navigation
-    // is the deterministic post-condition that the whole handler — including the
-    // (suppressed) autosave branch — has run; then assert no PATCH fired.
-    await waitFor(() => expect(router.state.location.search).not.toHaveProperty('status'));
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: /Remove status filter/i })).toBeNull(),
-    );
-
-    // No ?view= → activeView is the default view by fallback. User removing
-    // a chip is an ad-hoc filter change; it must NOT mutate the default view.
-    expect(updateViewCalls).toEqual([]);
-  });
+  // B.6 MOVED: the FilterBar + its onClauseChange autosave moved to the unified
+  // ViewControls (project header). The "filter change does NOT autosave without
+  // ?view=" contract now lives — un-weakened — in view-controls.test.tsx
+  // ("does NOT autosave a filter change without ?view="). TableView no longer
+  // renders the FilterBar, so the chip-removal path is not reachable from here.
 
   it('clicking a sort header does NOT patch view.sort when no ?view= is in the URL', async () => {
     const defaultView = {
@@ -1789,13 +1709,12 @@ describe('TableView', () => {
     expect(settingsBtn.closest('[data-testid="table-settings-col"]')).toBeTruthy();
   });
 
-  it('the top filter bar no longer contains the column picker', async () => {
-    setupPinnedSettings();
-    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
-
-    const filterBar = screen.getByTestId('filter-bar');
-    expect(within(filterBar).queryByRole('button', { name: /columns/i })).toBeNull();
-  });
+  // B.6 MOVED: the FilterBar moved to the unified ViewControls (project header),
+  // so TableView no longer renders a `filter-bar`. The "filter bar does NOT
+  // contain the column picker" contract now lives — un-weakened — in
+  // view-controls.test.tsx ("FilterBar has no column picker"). The companion
+  // assertion (the column picker IS the pinned settings column) stays above and
+  // remains owned by TableView.
 
   it('clicking a custom field header sorts by that field', async () => {
     // FS-2: every column header is sortable, not just built-ins. The seeded
@@ -2485,63 +2404,9 @@ describe('TableView grouped (list view)', () => {
   });
 });
 
-// B.2 seam: ListControls (the live group-by + aggregate editor) mounts in the
-// TableView toolbar ONLY for a grouped `list` view. This crosses the REAL,
-// un-mocked component chain (router → TableView → ListControls → useActiveView)
-// — no mock of the ListControls boundary — so a mis-pathed mount or a wrong
-// `grouping` guard would fail it.
-describe('TableView ListControls wiring (B.2)', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  const json = (body: unknown) =>
-    new Response(JSON.stringify(body), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    });
-
-  function makeFetch(view: typeof viewRow & { type: string }) {
-    return vi.fn<typeof fetch>(async (url, init) => {
-      const u = String(url);
-      const method = init?.method ?? 'GET';
-      if (u.includes('/statuses') && method === 'GET') return json({ data: [statusRow] });
-      if (u.includes('/fields') && method === 'GET') return json({ data: [fieldRow] });
-      if (u.includes('/views') && method === 'GET') return json({ data: [view] });
-      if (u.includes('/group-summary') && method === 'GET')
-        return json({ data: { groups: [], ungrouped: null, truncated: false } });
-      if (u.includes('/documents') && method === 'GET')
-        return json({ data: { data: [docRow], nextCursor: null } });
-      return json({});
-    });
-  }
-
-  it('mounts the live group-by control for a `list` view (un-mocked chain)', async () => {
-    vi.stubGlobal('fetch', makeFetch({ ...viewRow, type: 'list' }));
-    const { queryClient, router } = setup();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>,
-    );
-
-    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
-    // The ListControls "Group by" picker is live (the B.2 settings editor).
-    expect(await screen.findByLabelText(/Group by/i)).toBeInTheDocument();
-  });
-
-  it('does NOT mount ListControls for a `table` view (negative case)', async () => {
-    vi.stubGlobal('fetch', makeFetch({ ...viewRow, type: 'table' }));
-    const { queryClient, router } = setup();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>,
-    );
-
-    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
-    // A flat table view never groups, so the settings editor is absent.
-    expect(screen.queryByLabelText(/Group by/i)).toBeNull();
-  });
-});
+// B.6 MOVED: the grouped-list settings editor (ListControls) moved from the
+// TableView toolbar to the unified ViewControls (project header). Its mount —
+// "list view → group-by + aggregate controls present" + the negative case
+// "table view → no settings slot" — now lives, un-weakened, in
+// view-controls.test.tsx ("per-type settings slot"). TableView no longer mounts
+// ListControls, so the B.2 wiring seam is no longer reachable from here.

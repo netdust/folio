@@ -1,12 +1,11 @@
 import type { AggregateSpec, GroupedListSettings } from '@folio/shared';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { Inbox } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
   type DocumentPatch,
   type DocumentSummary,
-  type FilterClauseUrl,
   applyFrontmatterClauses,
   clausesToListParams,
   parseFilters,
@@ -22,13 +21,12 @@ import { formatApiError } from '../../lib/api/index.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
 import { useTables } from '../../lib/api/tables.ts';
 import { useUpdateView, useViews } from '../../lib/api/views.ts';
-import { FilterBar } from '../filter/filter-bar.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { EmptyState } from '../views/empty-state.tsx';
 import { GroupHeaderRow } from '../views/group-header-row.tsx';
 import { defaultGroupedListSettings } from '../views/grouped-list-config.tsx';
-import { ListControls } from '../views/list-controls.tsx';
 import { ListSkeleton } from '../views/list-skeleton.tsx';
+import { useViewFilterHydration } from '../views/use-view-filter-hydration.ts';
 import { ColumnMenu } from './column-menu.tsx';
 import { ColumnPicker } from './column-picker.tsx';
 import { columnSuggestions } from './column-suggestions.ts';
@@ -206,79 +204,11 @@ export function TableView({ wslug, pslug, tslug }: Props) {
     return list.find((v) => v.isDefault) ?? list[0] ?? null;
   }, [urlViewId, viewsData]);
 
-  // Hydrate URL filters/sort from the active view ONCE per view. The ref guard
-  // prevents the effect from re-firing when `search` updates as a result of
-  // hydration. User changes to the URL after hydration always win until they
-  // explicitly save filters back to the view (Task 8).
-  const hydratedViewId = useRef<string | null>(null);
-  useEffect(() => {
-    if (!activeView) return;
-    if (hydratedViewId.current === activeView.id) return;
-    hydratedViewId.current = activeView.id;
-
-    const viewFilters = (activeView.filters ?? {}) as Record<string, unknown>;
-    const nextSearch: Record<string, unknown> = {};
-    const FILTER_KEYS = ['status', 'priority', 'assignee', 'labels', 'updated_since'] as const;
-
-    if (search.doc) nextSearch.doc = search.doc;
-    if (urlViewId) nextSearch.view = urlViewId;
-
-    // URL filter params win — a user who deep-links with ?view=v1&status=todo
-    // explicitly chose that override; the view's stored value only fills
-    // missing keys.
-    for (const key of FILTER_KEYS) {
-      const urlValue = search[key];
-      if (urlValue !== undefined && urlValue !== null && urlValue !== '') {
-        nextSearch[key] = urlValue;
-      }
-    }
-
-    // The compiler accepts both flat (`{status: 'In Progress'}`) and AST
-    // (`{status: {$eq: 'In Progress'}}`); honor both at read time.
-    for (const key of FILTER_KEYS) {
-      if (key in nextSearch) continue; // URL already supplied this key.
-      const raw = viewFilters[key];
-      if (raw === undefined || raw === null || raw === '') continue;
-      if (typeof raw === 'string' || typeof raw === 'number' || Array.isArray(raw)) {
-        nextSearch[key] = raw;
-        continue;
-      }
-      if (typeof raw === 'object') {
-        const op = raw as Record<string, unknown>;
-        if ('$eq' in op && op.$eq !== undefined) nextSearch[key] = op.$eq;
-        else if ('$in' in op && Array.isArray(op.$in)) nextSearch[key] = op.$in as unknown[];
-      }
-    }
-
-    // Sort: URL wins for the same reason.
-    const urlSort = search.sort;
-    if (typeof urlSort === 'string' && urlSort) {
-      nextSearch.sort = urlSort;
-      const urlDir = search.dir;
-      nextSearch.dir = urlDir === 'desc' ? 'desc' : 'asc';
-    } else {
-      const viewSort = activeView.sort;
-      if (Array.isArray(viewSort) && viewSort.length > 0) {
-        const first = viewSort[0];
-        if (first && typeof first === 'object' && 'key' in first) {
-          const k = (first as { key: unknown }).key;
-          if (typeof k === 'string') {
-            nextSearch.sort = k;
-            const d = (first as { dir?: unknown }).dir;
-            nextSearch.dir = d === 'desc' ? 'desc' : 'asc';
-          }
-        }
-      }
-    }
-
-    const searchObj = search as Record<string, unknown>;
-    const same =
-      Object.keys(searchObj).length === Object.keys(nextSearch).length &&
-      Object.keys(nextSearch).every((k) => sameSearchValue(nextSearch[k], searchObj[k]));
-    if (same) return;
-
-    void navigate({ to: '.', search: nextSearch, replace: true });
-  }, [activeView, urlViewId, navigate, search]);
+  // Hydrate URL filters/sort from the active view ONCE per view, via the SHARED
+  // hook (also called by ViewControls so there is one hydration source). User
+  // changes to the URL after hydration always win until they explicitly save
+  // filters back to the view.
+  useViewFilterHydration(activeView, search, navigate, urlViewId);
 
   const allColumns: Column[] = useMemo(
     // Pass the loaded docs so mergeColumns can synthesize columns for visible
@@ -310,45 +240,6 @@ export function TableView({ wslug, pslug, tslug }: Props) {
       void navigate({ to: '.', search: { ...search, doc: created.slug }, replace: false });
     } catch (err) {
       toast.error(formatApiError(err));
-    }
-  };
-
-  const onClauseChange = (next: FilterClauseUrl[]) => {
-    const nextSearch: Record<string, unknown> = { ...search };
-    const flatFilters: Record<string, unknown> = {};
-    for (const k of ['status', 'priority', 'labels', 'assignee', 'updated_since']) {
-      delete nextSearch[k];
-    }
-    for (const c of next) {
-      if (c.kind === 'status') {
-        nextSearch.status = c.values;
-        flatFilters.status = c.values;
-      }
-      if (c.kind === 'priority') {
-        nextSearch.priority = c.value;
-        flatFilters.priority = c.value;
-      }
-      if (c.kind === 'labels') {
-        nextSearch.labels = c.values;
-        flatFilters.labels = c.values;
-      }
-      if (c.kind === 'assignee') {
-        nextSearch.assignee = c.value;
-        flatFilters.assignee = c.value;
-      }
-      if (c.kind === 'updated_since') {
-        nextSearch.updated_since = c.value;
-        flatFilters.updated_since = c.value;
-      }
-    }
-    void navigate({ to: '.', search: nextSearch, replace: false });
-    // Only autosave when the user has explicitly opened this view (?view=<id>).
-    // Without ?view=, activeView is a fallback — filter changes are ad-hoc.
-    if (urlViewId && activeView && activeView.id === urlViewId) {
-      updateView.mutate(
-        { id: activeView.id, patch: { filters: flatFilters } },
-        { onError: (err) => toast.error(formatApiError(err)) },
-      );
     }
   };
 
@@ -605,19 +496,10 @@ export function TableView({ wslug, pslug, tslug }: Props) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-shrink-0 items-center justify-between gap-2">
-        <FilterBar
-          clauses={clauses}
-          statuses={statuses ?? []}
-          pinnedFields={fields ?? []}
-          onChange={onClauseChange}
-        />
-        {/* B.2: the grouped `list` view exposes live group-by + aggregate
-            editors that PATCH the active view's settings on change — the fix
-            for "once a view is created I can't change the settings anymore".
-            Only a `list` view groups, so the controls only mount when grouping. */}
-        {grouping && <ListControls wslug={wslug} pslug={pslug} tslug={tslug} />}
-      </div>
+      {/* B.6: the FilterBar + the grouped-list settings (group-by + aggregates)
+          moved to the unified ViewControls in the project header (mounted once
+          for every view). TableView still READS the hydrated URL filter for its
+          listParams — it just no longer OWNS the filter/settings UI. */}
       <div
         data-testid="table-scroll"
         className="folio-scroll -mx-[22px] flex-1 min-h-0 overflow-auto"

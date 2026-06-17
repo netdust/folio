@@ -15,7 +15,6 @@ import { toast } from 'sonner';
 import { type DocumentSummary, useDocuments, useUpdateDocument } from '../../lib/api/documents.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { useActiveView } from '../../lib/api/use-active-view.ts';
-import { useUpdateView } from '../../lib/api/views.ts';
 import { type DueUrgency, dueUrgency } from '../../lib/due-urgency.ts';
 import { cn } from '../ui/cn.ts';
 import { bucketKey } from './calendar-grid.ts';
@@ -41,9 +40,6 @@ interface Props {
    */
   initialRange?: { start: string; end: string };
 }
-
-const ZOOMS: TimelineZoom[] = ['day', 'week', 'month'];
-const ZOOM_LABELS: Record<TimelineZoom, string> = { day: 'Day', week: 'Week', month: 'Month' };
 
 /** Narrow an unknown settings value to a non-empty string, else fall back. */
 function settingString(value: unknown, fallback: string): string {
@@ -179,7 +175,6 @@ export function TimelineView({ wslug, pslug, tslug, initialRange }: Props) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const { view } = useActiveView(wslug, pslug, tslug);
-  const update = useUpdateView(wslug, pslug, tslug);
 
   // Per-view config. settings is Record<string, unknown> — narrow each key.
   const fallbackField = settingString(view?.settings?.fallbackField, 'due_date');
@@ -305,21 +300,6 @@ export function TimelineView({ wslug, pslug, tslug, initialRange }: Props) {
     void navigate({ to: '.', search: { ...search, doc: slug }, replace: false });
   };
 
-  // INVARIANT 16: zoom is a VIEW attribute (per-view config), so the write
-  // targets the VIEW — useUpdateView PATCHes /views/:id — NEVER the document.
-  // Spread the existing settings so startField/endField are preserved.
-  const setZoom = async (nextZoom: TimelineZoom) => {
-    if (!view || nextZoom === zoom) return;
-    try {
-      await update.mutateAsync({
-        id: view.id,
-        patch: { settings: { ...view.settings, zoom: nextZoom } },
-      });
-    } catch (err) {
-      toast.error(formatApiError(err));
-    }
-  };
-
   const jumpToday = () => {
     if (todayCol < 0) return;
     const el = document.querySelector(`[data-testid="timeline-col"][data-col-index="${todayCol}"]`);
@@ -354,26 +334,12 @@ export function TimelineView({ wslug, pslug, tslug, initialRange }: Props) {
       onDragCancel={onDragCancel}
     >
       <div className="flex h-full min-h-0 flex-col px-[22px] py-2">
-        {/* Toolbar: zoom toggle + Today jump */}
+        {/* Toolbar: Today jump. The zoom toggle + start/end field selects moved
+            to the unified ViewControls in the project header (B.6); this view
+            still READS settings.zoom to render the scale. */}
         <div className="mb-3 flex items-center gap-2">
           <h2 className="text-base font-medium text-fg">Timeline</h2>
           <div className="ml-auto flex items-center gap-1">
-            <div className="flex items-center rounded-md border border-border-light">
-              {ZOOMS.map((z) => (
-                <button
-                  key={z}
-                  type="button"
-                  onClick={() => void setZoom(z)}
-                  aria-pressed={z === zoom}
-                  className={cn(
-                    'px-2 py-1 text-sm first:rounded-l-md last:rounded-r-md',
-                    z === zoom ? 'bg-card text-fg' : 'text-fg-2 hover:bg-card',
-                  )}
-                >
-                  {ZOOM_LABELS[z]}
-                </button>
-              ))}
-            </div>
             <button
               type="button"
               onClick={jumpToday}

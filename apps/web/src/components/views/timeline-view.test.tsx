@@ -209,48 +209,13 @@ describe('TimelineView', () => {
     await waitFor(() => expect(router.state.location.search).toMatchObject({ doc: 'single' }));
   });
 
-  // THE Tier-A slice (invariant 16): clicking a zoom button persists zoom to the
-  // VIEW, not the document. We assert the write crosses the un-mocked client wire
-  // and lands a PATCH on /views/<id> with settings.zoom — and that NO PATCH ever
-  // hits /documents (the config is view-owned, never a doc attribute).
-  it('zoom button persists zoom to the VIEW (not the document)', async () => {
-    const calls = stubFetch(
-      [{ slug: 'a', title: 'Task A', frontmatter: { due_date: '2026-06-10' } }],
-      { viewSettings: { zoom: 'week' } },
-    );
-    renderView();
-    await userEvent.click(await screen.findByRole('button', { name: /^day$/i }));
-
-    await waitFor(() => {
-      const patch = calls.find(
-        (c) => c.method === 'PATCH' && /\/views\/view-timeline-1$/.test(c.url),
-      );
-      expect(patch).toBeDefined();
-      expect((patch?.body as { settings?: { zoom?: string } })?.settings?.zoom).toBe('day');
-    });
-
-    // Adversarial / negative: the zoom write must NOT be a document mutation.
-    const docPatch = calls.find((c) => c.method === 'PATCH' && /\/documents\//.test(c.url));
-    expect(docPatch).toBeUndefined();
-  });
-
-  it('preserves existing settings when persisting zoom', async () => {
-    const calls = stubFetch(
-      [{ slug: 'a', title: 'Task A', frontmatter: { start_date: '2026-06-02' } }],
-      { viewSettings: { zoom: 'week', startField: 'start_date', endField: 'end_date' } },
-    );
-    renderView();
-    await userEvent.click(await screen.findByRole('button', { name: /^month$/i }));
-    await waitFor(() => {
-      const patch = calls.find(
-        (c) => c.method === 'PATCH' && /\/views\/view-timeline-1$/.test(c.url),
-      );
-      const settings = (patch?.body as { settings?: Record<string, unknown> })?.settings;
-      expect(settings?.zoom).toBe('month');
-      // Spread of existing settings — startField is not dropped.
-      expect(settings?.startField).toBe('start_date');
-    });
-  });
+  // B.6 MOVED: the zoom toggle moved from TimelineView to the unified
+  // ViewControls (project header). The Tier-A slice — "a zoom change PATCHes
+  // settings.zoom on the VIEW, never a document, preserving sibling settings" —
+  // now lives, un-weakened, in view-controls.test.tsx ("timeline zoom change
+  // PATCHes settings.zoom"). TimelineView still READS settings.zoom to render
+  // the scale (the "renders bars under the configured zoom" cases above prove
+  // the read path).
 
   it('shows an empty state when there are zero dated docs', async () => {
     stubFetch([{ slug: 'u', title: 'No Date', frontmatter: {} }], {

@@ -2,11 +2,11 @@ import { Outlet, createFileRoute, useNavigate, useSearch } from '@tanstack/react
 import { Loader2, PanelRight, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { z } from 'zod';
-import { BoardControls } from '../components/kanban/board-controls.tsx';
 import { MainFrame } from '../components/shell/main-frame.tsx';
 import { DocumentSlideover } from '../components/slideover/document-slideover.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Icon } from '../components/ui/icon.tsx';
+import { ViewControls } from '../components/views/view-controls.tsx';
 import { agentPanelBus } from '../lib/agent-panel-bus.ts';
 import { useCreateDocument, useDocuments } from '../lib/api/documents.ts';
 import { formatApiError } from '../lib/api/index.ts';
@@ -34,8 +34,10 @@ function ProjectLayout() {
   const { data: pages } = useDocuments(wslug, pslug, tslug, { type: 'page', limit: 200 });
   const create = useCreateDocument(wslug, pslug, tslug);
   useLiveDocuments(wslug, pslug, project?.id);
-  // The kanban BoardControls gate is keyed off the ACTIVE VIEW's type (invariant 18),
-  // not a URL shape. Saved-view SWITCHING lives in the rail, not the header.
+  // The header carries ONE unified ViewControls for EVERY view (the board's
+  // model generalized): a shared FilterBar + a per-type settings slot, gated on
+  // the ACTIVE VIEW (invariant 18), not a URL shape. Saved-view SWITCHING lives
+  // in the rail, not the header.
   const { view: activeView } = useActiveView(wslug, pslug, tslug);
 
   if (isLoading) return <div className="p-8 text-fg-3">Loading project…</div>;
@@ -92,11 +94,10 @@ function ProjectLayout() {
         tabs={
           // Saved-view switching lives in the RAIL (the single saved-views surface);
           // a header tab-per-view just duplicated it (Stefan, 2026-06-16). The header
-          // only carries the ACTIVE view's controls — today that's BoardControls when
-          // the active view is a kanban (invariant 18 active-view gate, not a switcher).
-          activeView?.type === 'kanban' ? (
-            <BoardControls wslug={wslug} pslug={pslug} tslug={tslug} />
-          ) : null
+          // carries the ACTIVE view's unified controls: ONE ViewControls for every
+          // view type (FilterBar + per-type settings slot, invariant 18 active-view
+          // gate, not a switcher).
+          activeView ? <ViewControls wslug={wslug} pslug={pslug} tslug={tslug} /> : null
         }
       >
         <Outlet />
