@@ -168,4 +168,24 @@ describe('AssigneePicker', () => {
     await userEvent.click(await screen.findByRole('button', { name: /clear assignee|unassign/i }));
     expect(onChange).toHaveBeenCalledWith('');
   });
+
+  it('typing in the search box narrows the member list (seam over the real filter)', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    stubFetch({
+      '/documents?type=agent': agentsResponse,
+      '/projects': projectsResponse,
+      '/members': memberResponse,
+    });
+    render(<AssigneePicker wslug="acme" pslug="web" value="" onChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
+    await userEvent.click(screen.getByRole('button', { name: /unassigned/i }));
+    // Both members visible with an empty query.
+    expect(await screen.findByText('Alice')).toBeInTheDocument();
+    expect(screen.getByText('Bob')).toBeInTheDocument();
+    // Filtering to "ali" keeps Alice, drops Bob.
+    await userEvent.type(screen.getByLabelText(/filter assignees/i), 'ali');
+    expect(screen.getByText('Alice')).toBeInTheDocument();
+    expect(screen.queryByText('Bob')).not.toBeInTheDocument();
+  });
 });
