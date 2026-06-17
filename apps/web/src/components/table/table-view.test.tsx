@@ -2062,6 +2062,13 @@ describe('TableView — pagination + server-side filter (M3)', () => {
       if (u.includes('/fields') && method === 'GET') return json({ data: [] });
       if (u.includes('/views') && method === 'GET') return json({ data: [viewRow] });
       if (u.includes('/tables') && method === 'GET') return json({ data: [] });
+      // viewRow is type:'list' → TableView issues a group-summary query. These
+      // M3 pagination tests exercise the FLAT row path, so return an empty
+      // summary (grouping falls back to flat) and keep it OUT of documentUrls —
+      // its URL also contains "/documents", so it MUST be matched first.
+      if (u.includes('/group-summary') && method === 'GET') {
+        return json({ data: { groups: [], ungrouped: null, truncated: false } });
+      }
       if (u.includes('/documents') && method === 'GET') {
         documentUrls.push(u);
         return json({ data: documentsHandler(new URL(u, 'http://test.local')) });
@@ -2197,5 +2204,181 @@ describe('TableView — pagination + server-side filter (M3)', () => {
 
     await waitFor(() => expect(screen.getByText('Page two')).toBeInTheDocument());
     expect(page2Calls).toBe(1);
+  });
+});
+
+// A.2: a `type:'list'` active view turns TableView into the GROUPED table — it
+// renders a GroupHeaderRow section per endpoint group (count from the
+// group-summary endpoint, NEVER from loaded-row counts), the group's TableRows
+// under it, the ungrouped bucket last, and collapse hides a group's rows. A
+// `type:'table'` view stays FLAT. Reuses ALL of TableView's existing wiring.
+describe('TableView grouped (list view)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const listView = {
+    ...viewRow,
+    type: 'list' as const,
+    settings: { groupBy: 'status', aggregates: [{ op: 'count' }] },
+    visibleFields: ['title', 'status', 'updated_at'],
+  };
+
+  const tableView = {
+    ...viewRow,
+    type: 'table' as const,
+    settings: {},
+    visibleFields: ['title', 'status', 'updated_at'],
+  };
+
+  const doneStatus = { ...statusRow, id: 's-done', key: 'done', name: 'Done', order: 1 };
+  const todoStatus = { ...statusRow, id: 's-todo', key: 'todo', name: 'Todo', order: 0 };
+
+  const mkDoc = (id: string, title: string, status: string | null) => ({
+    id,
+    slug: id,
+    type: 'work_item' as const,
+    title,
+    status: status as string | null,
+    parentId: null,
+    frontmatter: {},
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  });
+
+  // The group-summary endpoint is the SOURCE OF TRUTH for counts: 'done' = 148,
+  // 'todo' = 43, plus an ungrouped bucket of 5 — far more than the handful of
+  // rows actually loaded below (the page-2 guard).
+  const SUMMARY = {
+    groups: [
+      { value: 'done', count: 148, aggregates: { count: 148 } },
+      { value: 'todo', count: 43, aggregates: { count: 43 } },
+    ],
+    ungrouped: { value: null, count: 5, aggregates: { count: 5 } },
+    truncated: false,
+  };
+
+  // Only a couple of rows per group are LOADED (the endpoint reports far more).
+  const LOADED = [
+    mkDoc('d-done-1', 'Done one', 'done'),
+    mkDoc('d-done-2', 'Done two', 'done'),
+    mkDoc('d-todo-1', 'Todo one', 'todo'),
+    mkDoc('d-none-1', 'No status item', null),
+  ];
+
+  function makeGroupedFetch(view: typeof listView | typeof tableView, summary = SUMMARY) {
+    return vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+      const json = (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      if (u.includes('/statuses') && method === 'GET')
+        return json({ data: [todoStatus, doneStatus] });
+      if (u.includes('/fields') && method === 'GET') return json({ data: [] });
+      if (u.includes('/views') && method === 'GET') return json({ data: [view] });
+      if (u.includes('/tables') && method === 'GET') return json({ data: [] });
+      // group-summary BEFORE the generic /documents branch (its URL also
+      // contains "/documents").
+      if (u.includes('/group-summary') && method === 'GET') return json({ data: summary });
+      if (u.includes('/documents') && method === 'GET')
+        return json({ data: { data: LOADED, nextCursor: null } });
+      return json({});
+    });
+  }
+
+  it('renders a GroupHeaderRow per endpoint group with the FULL-SET count, not the loaded count', async () => {
+    vi.stubGlobal('fetch', makeGroupedFetch(listView));
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    // One header per group, keyed by the endpoint value.
+    const doneHeader = await screen.findByTestId('group-header-row-status-done');
+    const todoHeader = await screen.findByTestId('group-header-row-status-todo');
+    expect(doneHeader).toBeInTheDocument();
+    expect(todoHeader).toBeInTheDocument();
+
+    // Page-2 guard: 'done' shows 148 (endpoint), though only 2 'done' rows loaded.
+    expect(within(doneHeader).getByText(/148 items/)).toBeInTheDocument();
+    expect(within(todoHeader).getByText(/43 items/)).toBeInTheDocument();
+  });
+
+  it("renders each group's loaded TableRows under its header", async () => {
+    vi.stubGlobal('fetch', makeGroupedFetch(listView));
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Done one')).toBeInTheDocument());
+    expect(screen.getByText('Done two')).toBeInTheDocument();
+    expect(screen.getByText('Todo one')).toBeInTheDocument();
+  });
+
+  it('renders the ungrouped bucket LAST', async () => {
+    vi.stubGlobal('fetch', makeGroupedFetch(listView));
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    const ungrouped = await screen.findByTestId('group-header-row-status-__nogroup__');
+    expect(ungrouped).toBeInTheDocument();
+    expect(screen.getByText('No status item')).toBeInTheDocument();
+
+    // The ungrouped header is the LAST group header in document order.
+    const headers = screen.getAllByTestId(/^group-header-row-status-/);
+    expect(headers[headers.length - 1]).toBe(ungrouped);
+  });
+
+  it('collapsing a group hides its rows but keeps the header (and its count)', async () => {
+    vi.stubGlobal('fetch', makeGroupedFetch(listView));
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    const doneHeader = await screen.findByTestId('group-header-row-status-done');
+    expect(screen.getByText('Done one')).toBeInTheDocument();
+
+    const chevron = within(doneHeader).getByRole('button', { name: /collapse group/i });
+    await act(async () => {
+      fireEvent.click(chevron);
+    });
+
+    // Rows gone, header + count still present.
+    await waitFor(() => expect(screen.queryByText('Done one')).toBeNull());
+    expect(screen.queryByText('Done two')).toBeNull();
+    expect(screen.getByTestId('group-header-row-status-done')).toBeInTheDocument();
+    expect(within(doneHeader).getByText(/148 items/)).toBeInTheDocument();
+    // Other groups' rows are unaffected.
+    expect(screen.getByText('Todo one')).toBeInTheDocument();
+  });
+
+  it('a type:table view renders FLAT — no group headers (regression guard)', async () => {
+    vi.stubGlobal('fetch', makeGroupedFetch(tableView));
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Done one')).toBeInTheDocument());
+    // Flat: rows render, but NO group section headers exist.
+    expect(screen.queryByTestId(/^group-header-row-/)).toBeNull();
   });
 });

@@ -1,9 +1,11 @@
+import type { AggregateSpec, GroupedListSettings } from '@folio/shared';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { Inbox } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
   type DocumentPatch,
+  type DocumentSummary,
   type FilterClauseUrl,
   applyFrontmatterClauses,
   clausesToListParams,
@@ -15,6 +17,7 @@ import {
 } from '../../lib/api/documents.ts';
 import { useCreateField, useDeleteField, useFields, useUpdateField } from '../../lib/api/fields.ts';
 import type { FieldType } from '../../lib/api/fields.ts';
+import { useGroupSummary } from '../../lib/api/group-summary.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
 import { useTables } from '../../lib/api/tables.ts';
@@ -22,6 +25,8 @@ import { useUpdateView, useViews } from '../../lib/api/views.ts';
 import { FilterBar } from '../filter/filter-bar.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { EmptyState } from '../views/empty-state.tsx';
+import { GroupHeaderRow } from '../views/group-header-row.tsx';
+import { defaultGroupedListSettings } from '../views/grouped-list-config.tsx';
 import { ListSkeleton } from '../views/list-skeleton.tsx';
 import { ColumnMenu } from './column-menu.tsx';
 import { ColumnPicker } from './column-picker.tsx';
@@ -52,6 +57,41 @@ export function sameSearchValue(a: unknown, b: unknown): boolean {
     return a.every((v, i) => v === b[i]);
   }
   return false;
+}
+
+/** Collapse-state key + GroupHeaderRow testid suffix for the ungrouped bucket. */
+const NO_GROUP_KEY = '__nogroup__';
+
+/** Read the active view's `settings` as GroupedListSettings, with safe defaults. */
+function resolveGroupSettings(settings: Record<string, unknown> | undefined): GroupedListSettings {
+  const defaults = defaultGroupedListSettings();
+  if (!settings || typeof settings !== 'object') return defaults;
+  const s = settings as Partial<GroupedListSettings>;
+  return {
+    groupBy: typeof s.groupBy === 'string' && s.groupBy ? s.groupBy : defaults.groupBy,
+    aggregates:
+      Array.isArray(s.aggregates) && s.aggregates.length > 0 ? s.aggregates : defaults.aggregates,
+    rowLayout:
+      s.rowLayout && typeof s.rowLayout === 'object' && typeof s.rowLayout.primary === 'string'
+        ? {
+            primary: s.rowLayout.primary,
+            subtitle: s.rowLayout.subtitle,
+            fields: s.rowLayout.fields ?? [],
+          }
+        : defaults.rowLayout,
+  };
+}
+
+/**
+ * The group value a loaded row falls under — DISPLAY placement only. `status`
+ * reads the column; any other key reads frontmatter. Empty/missing → `null`
+ * (the ungrouped bucket).
+ */
+function bucketValue(doc: DocumentSummary, groupBy: string): string | null {
+  const raw =
+    groupBy === 'status' ? doc.status : (doc.frontmatter as Record<string, unknown>)[groupBy];
+  if (raw === null || raw === undefined || raw === '') return null;
+  return String(raw);
 }
 
 export function TableView({ wslug, pslug, tslug }: Props) {
@@ -403,6 +443,61 @@ export function TableView({ wslug, pslug, tslug }: Props) {
     [pageData, clauses],
   );
 
+  // A.2: grouping is ON when the active view is a `list` type — the same
+  // spreadsheet table, rendered as group sections. A `table` view is flat.
+  const grouping = activeView?.type === 'list';
+  const groupSettings: GroupedListSettings = useMemo(
+    () => resolveGroupSettings(activeView?.settings),
+    [activeView],
+  );
+  const groupBy = grouping ? groupSettings.groupBy : null;
+  const aggregates: AggregateSpec[] = grouping ? groupSettings.aggregates : [];
+
+  // Headers (full-set counts + aggregates) come from the group-summary endpoint,
+  // fed the SAME server filter as the rows so headers and rows stay consistent.
+  // `useGroupSummary` self-gates `enabled` on groupBy + a non-empty aggregates
+  // list, so a `table` view never issues the request.
+  const groupSummary = useGroupSummary(
+    wslug,
+    pslug,
+    tslug,
+    { groupBy: groupBy ?? '', aggregates, filter: listParams.filter, type: 'work_item' },
+    { enabled: grouping },
+  );
+
+  // Collapse state — a local Set of group keys (the endpoint value, or
+  // `NO_GROUP_KEY` for the ungrouped bucket).
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const toggleGroup = useCallback((key: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  // Bucket the LOADED rows by their groupBy value — DISPLAY placement only; the
+  // header count never comes from these (the page-2 guard).
+  const rowsByGroup = useMemo(() => {
+    const map = new Map<string | null, DocumentSummary[]>();
+    if (!groupBy) return map;
+    for (const doc of filteredDocs) {
+      const key = bucketValue(doc, groupBy);
+      const existing = map.get(key);
+      if (existing) existing.push(doc);
+      else map.set(key, [doc]);
+    }
+    return map;
+  }, [filteredDocs, groupBy]);
+
+  // Grouping only actually renders sections when the endpoint returned groups (or
+  // an ungrouped bucket). While the summary is loading/empty/errored we fall back
+  // to the flat list so the table is never blank.
+  const summaryGroups = groupSummary.data?.groups ?? [];
+  const summaryUngrouped = groupSummary.data?.ungrouped ?? null;
+  const renderGrouped = grouping && (summaryGroups.length > 0 || summaryUngrouped !== null);
+
   const docs = pageData;
 
   // slug→{slug,title} resolver covering the project's pages + THIS table's
@@ -557,20 +652,75 @@ export function TableView({ wslug, pslug, tslug }: Props) {
             />
           ) : null}
           <div role="list" className="flex flex-col">
-            {filteredDocs.map((doc) => (
-              <TableRow
-                key={doc.id}
-                doc={doc}
-                columns={visibleColumns}
-                statuses={statuses ?? []}
-                wslug={wslug}
-                pslug={pslug}
-                isPending={pendingSlugs.has(doc.slug)}
-                onOpen={openDoc}
-                onUpdate={onUpdate}
-                resolveRelation={relationResolve}
-              />
-            ))}
+            {renderGrouped
+              ? (() => {
+                  const renderRow = (doc: DocumentSummary) => (
+                    <TableRow
+                      key={doc.id}
+                      doc={doc}
+                      columns={visibleColumns}
+                      statuses={statuses ?? []}
+                      wslug={wslug}
+                      pslug={pslug}
+                      isPending={pendingSlugs.has(doc.slug)}
+                      onOpen={openDoc}
+                      onUpdate={onUpdate}
+                      resolveRelation={relationResolve}
+                    />
+                  );
+                  return (
+                    <>
+                      {summaryGroups.map((g) => {
+                        const key = g.value ?? NO_GROUP_KEY;
+                        const collapsed = collapsedGroups.has(key);
+                        const rows = rowsByGroup.get(g.value) ?? [];
+                        return (
+                          <div key={key} className="flex flex-col">
+                            <GroupHeaderRow
+                              row={g}
+                              aggregates={aggregates}
+                              groupBy={groupBy ?? ''}
+                              label={g.value ?? '(none)'}
+                              collapsed={collapsed}
+                              onToggle={() => toggleGroup(key)}
+                            />
+                            {!collapsed ? rows.map(renderRow) : null}
+                          </div>
+                        );
+                      })}
+                      {/* The ungrouped bucket renders LAST. */}
+                      {summaryUngrouped ? (
+                        <div key={NO_GROUP_KEY} className="flex flex-col">
+                          <GroupHeaderRow
+                            row={summaryUngrouped}
+                            aggregates={aggregates}
+                            groupBy={groupBy ?? ''}
+                            label="(none)"
+                            collapsed={collapsedGroups.has(NO_GROUP_KEY)}
+                            onToggle={() => toggleGroup(NO_GROUP_KEY)}
+                          />
+                          {!collapsedGroups.has(NO_GROUP_KEY)
+                            ? (rowsByGroup.get(null) ?? []).map(renderRow)
+                            : null}
+                        </div>
+                      ) : null}
+                    </>
+                  );
+                })()
+              : filteredDocs.map((doc) => (
+                  <TableRow
+                    key={doc.id}
+                    doc={doc}
+                    columns={visibleColumns}
+                    statuses={statuses ?? []}
+                    wslug={wslug}
+                    pslug={pslug}
+                    isPending={pendingSlugs.has(doc.slug)}
+                    onOpen={openDoc}
+                    onUpdate={onUpdate}
+                    resolveRelation={relationResolve}
+                  />
+                ))}
             {!isLoading && !error && filteredDocs.length > 0 ? (
               <TableAddRow
                 columns={visibleColumns}

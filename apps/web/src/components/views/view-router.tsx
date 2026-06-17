@@ -3,7 +3,6 @@ import type { ReactElement } from 'react';
 import { useActiveView } from '../../lib/api/use-active-view.ts';
 import { TableView } from '../table/table-view.tsx';
 import { CalendarView } from './calendar-view.tsx';
-import { GroupedListView } from './grouped-list-view.tsx';
 import { KanbanView } from './kanban-view.tsx';
 import { TimelineView } from './timeline-view.tsx';
 
@@ -19,12 +18,14 @@ interface RendererProps {
  * bug — add the case HERE. The map is exhaustive over `ViewType`: a missing key
  * is a compile error, which is the convergence-point guarantee.
  *
- * `table` = the existing spreadsheet. `list`/`calendar`/`timeline`/`gallery`
- * start as graceful placeholders and are filled in by later clusters (2b/4/5/6).
+ * `table` and `list` both render the spreadsheet TableView — `list` makes it
+ * GROUP-AWARE (it decides grouping from the active view's `type`), reusing all of
+ * TableView's inline-edit/relations/column wiring. `calendar`/`timeline`/`gallery`
+ * start as graceful placeholders and are filled in by later clusters (4/5/6).
  */
 const viewRendererFor: Record<ViewType, (p: RendererProps) => ReactElement> = {
   table: (p) => <TableView {...p} />, // the existing spreadsheet
-  list: (p) => <GroupedListView {...p} />, // cluster 2b (grouped list)
+  list: (p) => <TableView {...p} />, // grouped table (TableView decides grouping)
   kanban: (p) => <KanbanView {...p} />,
   calendar: (p) => <CalendarView {...p} />, // cluster 4
   timeline: (p) => <TimelineView {...p} />, // cluster 5

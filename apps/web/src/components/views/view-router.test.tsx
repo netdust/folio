@@ -14,9 +14,6 @@ vi.mock('../table/table-view.tsx', () => ({
 vi.mock('./kanban-view.tsx', () => ({
   KanbanView: () => <div data-testid="kanban-view-marker" />,
 }));
-vi.mock('./grouped-list-view.tsx', () => ({
-  GroupedListView: () => <div data-testid="grouped-list-view-marker" />,
-}));
 vi.mock('./calendar-view.tsx', () => ({
   CalendarView: () => <div data-testid="calendar-view-marker" />,
 }));
@@ -57,10 +54,10 @@ describe('ViewRouter', () => {
     expect(screen.getByTestId('calendar-view-marker')).toBeInTheDocument();
   });
 
-  it('routes type:list → GroupedListView (cluster 2b)', () => {
+  it('routes type:list → TableView (the grouped table; TableView decides grouping)', () => {
     setView('list');
     render(<ViewRouter wslug="w" pslug="p" tslug="work-items" />);
-    expect(screen.getByTestId('grouped-list-view-marker')).toBeInTheDocument();
+    expect(screen.getByTestId('table-view-marker')).toBeInTheDocument();
   });
 
   it('routes type:timeline → TimelineView (cluster 5)', () => {
