@@ -124,3 +124,15 @@ virtualization · a11y (32) · reapStalePendingOps chunking · auth_rate_limits 
 - [x] DEBUG (systematic): a stale `bun --hot` dev server 500'd live — root-caused to dev-env NOT code (direct call + green tests + fresh-server 200). Restarted server. Memory: feedback_stale-bun-hot-dev-server-500.
 - [x] review fixes (`32fe7755`): I-3 useInfiniteDocuments + Load more · I-1 surface summary.error · I-2 filter incomplete specs · S-1 dedupe defaults · S-2 hoist aggregateKey
 - FINAL: web 995 / server 1909 / shared 80, 0 fail · tsc clean. Seeded test data cleaned from dev DB.
+
+### Cluster 3 (image field type) — DONE, at FULL REVIEW GATE (Stefan sign-off)
+- [x] 2.1 enum across 4 boundaries (3 TS + the SQL CHECK the plan missed) + migration 0039 table-rebuild (`f208eb96`) + row-preservation migration test (`b964cc37`, controller-added)
+- [x] 2.2 image renderer + isSafeImageUrl scheme guard (gates render + commit) (`f56d2ab0`)
+- [x] 2.3 infer image from image-extension URLs (`584a3a29`); type-picker N/A (no <select> exists — types inferred/pinned)
+- [x] ESCALATED to FULL (migration = 1h data-layer trigger). Panel: security-sentinel (3/3 PASS: migration non-destructive, guard sound, no SSRF; ReDoS-tested) + generalist (0 Crit/0 Imp, "merge-ready"). Sibling-site audit clean.
+- FINAL: server 1915 / web 1002 / shared 82, 0 fail · tsc clean all 3.
+
+### Cluster 3 — deferred (optional, not blockers)
+- [ ] S1 (BOTH reviewers): server-side scheme reject on field write (defense-in-depth) — DO THIS when a 2nd image renderer lands (e.g. a table-grid image cell), so the client guard isn't the only defense. Today client-only is accepted (server never dereferences; the one renderer makes unsafe schemes inert).
+- [ ] S2: <img> onError → "(no image)" fallback (polish; matches UrlField's dead-link behavior). Optional.
+- [ ] S3: image inference is path-based (query-param image URLs without extension → url). Deliberate trade-off; do NOT "fix" into over-matching.
