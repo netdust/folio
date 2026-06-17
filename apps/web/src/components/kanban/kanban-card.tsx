@@ -21,6 +21,11 @@ interface Props {
   // (used inside <DragOverlay>). The overlay portals to the body so it escapes
   // the column's `overflow-y-auto` clip and paints above the sibling columns.
   overlay?: boolean;
+  // When true, the card just landed from a drop → play a one-shot settle
+  // animation (scale+fade-in) so the drop reads as a smooth settle rather than a
+  // pop. `onSettled` fires when the animation ends so the parent clears the flag.
+  justLanded?: boolean;
+  onSettled?: () => void;
 }
 
 const LABEL_HUES = ['bg-info', 'bg-warning', 'bg-success', 'bg-danger', 'bg-primary'] as const;
@@ -45,11 +50,15 @@ function CardBody({
   doc,
   onOpen,
   isPending,
+  justLanded,
+  onSettled,
   dnd,
 }: {
   doc: DocumentSummary;
   onOpen: (slug: string) => void;
   isPending?: boolean;
+  justLanded?: boolean;
+  onSettled?: () => void;
   dnd: DndBindings;
 }) {
   const { setNodeRef, attributes, listeners, style, isDragging } = dnd;
@@ -80,6 +89,9 @@ function CardBody({
       onKeyDown={(e) => {
         if (e.key === 'Enter') onOpen(doc.slug);
       }}
+      // One-shot settle when the card just landed from a drop; clear the marker
+      // when the animation ends so it doesn't replay on the next render.
+      onAnimationEnd={justLanded ? onSettled : undefined}
       className={cn(
         // Base bg lifted from `bg-shell` to `bg-content` so the card stands
         // out from the kanban column's tinted body. Hover adds a clear bg +
@@ -88,6 +100,8 @@ function CardBody({
         'cursor-grab rounded-md border border-border-light bg-content px-3 py-2 text-sm text-fg shadow-sm transition-colors',
         isDragging && 'cursor-grabbing shadow-popover',
         isPending && 'opacity-60',
+        // Settle animation: a quick scale+fade-in as the dropped card lands.
+        justLanded && 'animate-in fade-in-0 zoom-in-95 duration-150 ease-out',
         'hover:border-fg-3 hover:bg-card',
       )}
     >
@@ -135,7 +149,13 @@ function CardBody({
   );
 }
 
-function DraggableCard({ doc, onOpen, isPending }: Omit<Props, 'sortable' | 'overlay'>) {
+function DraggableCard({
+  doc,
+  onOpen,
+  isPending,
+  justLanded,
+  onSettled,
+}: Omit<Props, 'sortable' | 'overlay'>) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: doc.id,
     data: { slug: doc.slug, currentStatus: doc.status },
@@ -149,12 +169,20 @@ function DraggableCard({ doc, onOpen, isPending }: Omit<Props, 'sortable' | 'ove
       doc={doc}
       onOpen={onOpen}
       isPending={isPending}
+      justLanded={justLanded}
+      onSettled={onSettled}
       dnd={{ setNodeRef, attributes, listeners, style, isDragging }}
     />
   );
 }
 
-function SortableCard({ doc, onOpen, isPending }: Omit<Props, 'sortable' | 'overlay'>) {
+function SortableCard({
+  doc,
+  onOpen,
+  isPending,
+  justLanded,
+  onSettled,
+}: Omit<Props, 'sortable' | 'overlay'>) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: doc.id,
     data: { slug: doc.slug, currentStatus: doc.status },
@@ -179,6 +207,8 @@ function SortableCard({ doc, onOpen, isPending }: Omit<Props, 'sortable' | 'over
       doc={doc}
       onOpen={onOpen}
       isPending={isPending}
+      justLanded={justLanded}
+      onSettled={onSettled}
       dnd={{ setNodeRef, attributes, listeners, style, isDragging }}
     />
   );
@@ -203,11 +233,31 @@ function OverlayCard({ doc, isPending }: Pick<Props, 'doc' | 'isPending'>) {
   );
 }
 
-export function KanbanCard({ doc, onOpen, isPending, sortable, overlay }: Props) {
+export function KanbanCard({
+  doc,
+  onOpen,
+  isPending,
+  sortable,
+  overlay,
+  justLanded,
+  onSettled,
+}: Props) {
   if (overlay) return <OverlayCard doc={doc} isPending={isPending} />;
   return sortable ? (
-    <SortableCard doc={doc} onOpen={onOpen} isPending={isPending} />
+    <SortableCard
+      doc={doc}
+      onOpen={onOpen}
+      isPending={isPending}
+      justLanded={justLanded}
+      onSettled={onSettled}
+    />
   ) : (
-    <DraggableCard doc={doc} onOpen={onOpen} isPending={isPending} />
+    <DraggableCard
+      doc={doc}
+      onOpen={onOpen}
+      isPending={isPending}
+      justLanded={justLanded}
+      onSettled={onSettled}
+    />
   );
 }

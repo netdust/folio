@@ -121,6 +121,13 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
   // column arrays during the drag (the "line school", not the move-items school:
   // no re-render storms / oscillation, and the line's (prev,next) pair is exactly
   // what rankBetween needs at drop). Cleared on drag end + cancel.
+  // The doc id that JUST landed from a drop — drives a one-shot settle animation
+  // (scale+fade-in) on the real card as it appears in its slot. We animate the
+  // REAL card, NOT the DragOverlay clone: a fading overlay would double up over
+  // the optimistically-placed card (the documented duplicate-card flicker, see
+  // dropAnimation={null} above). Cleared by the card's own onAnimationEnd (no
+  // timer to leak).
+  const [justLandedId, setJustLandedId] = useState<string | null>(null);
   const [dropIndicator, setDropIndicator] = useState<{ overId: string; edge: CardEdge } | null>(
     null,
   );
@@ -389,6 +396,9 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
       };
     }
 
+    // Mark the dropped card so it plays the one-shot settle animation as the
+    // optimistic re-sort places it in its slot.
+    setJustLandedId(activeId);
     setPendingSlugs((p) => new Set(p).add(slug));
     try {
       await update.mutateAsync({ slug, patch });
@@ -479,6 +489,10 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
                     doc={doc}
                     onOpen={openDoc}
                     isPending={pendingSlugs.has(doc.slug)}
+                    // One-shot settle animation as the dropped card lands; the
+                    // card clears the marker via onAnimationEnd (no timer).
+                    justLanded={justLandedId === doc.id}
+                    onSettled={() => setJustLandedId(null)}
                     // Always sortable (both modes) so over.id is a card on a
                     // card-over-card drop — see KanbanColumn `sortable` note.
                     sortable
