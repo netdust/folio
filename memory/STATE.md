@@ -1,4 +1,16 @@
-# 🎯 CURRENT (2026-06-15) — v1-hardening from docs/AUDIT-2026-06-10.md
+# 🎯 CURRENT (2026-06-17) — Phase 6 (Views), branch `phase-6/views` (UNMERGED)
+
+**Stopped for the day mid-Phase-6.** Full live state in auto-memory `project_views-rework-list-is-grouped-table`. Resume there.
+
+- **Done + GATED this session, awaiting Stefan sign-off:** Chunk A (list = group-aware TableView, card renderer deleted) + Chunk B (ONE unified `ViewControls` = shared FilterBar + per-type settings slot, mounted once in `w.$wslug.p.$pslug.tsx`; filter+settings persist per-view via `useUpdateView`, inv-16 clean). B.7 restyled `list-controls.tsx` to the board's Popover-pill look.
+- **Gate caught + FIXED a CRITICAL (C1, commit `d11c6576`):** shared filter only narrowed table/list — kanban/calendar/timeline ignored it (B.3 never implemented; green suite missed it). Now wired (`parseFilters`/`clausesToListParams`) into all 3, RED-first seam tests, kanban merge preserves `board_position`. Browser-verified live.
+- **Reviews:** invariant-auditor CLEAN, generalist (C1 fixed + I1/I2 folded), simplicity LOW. Web **1094** / tsc clean. Tip `53427c04`.
+- **DEFERRED follow-up (not blocking):** extract shared `GroupByPopover` (~50-line dup ListControls↔BoardToolbar).
+- **NEXT (pending sign-off):** Cluster 6 (gallery + G3) — still HELD; then Stage-3 shake-out over whole branch + finish-branch.
+
+---
+
+# v1-hardening from docs/AUDIT-2026-06-10.md (background — M0–M2 merged)
 
 **Driving the audit to v1 via `netdust-agent:harnessed-development`, scope = EVERYTHING (M0→M3), as ~5 gated branches, one milestone per session, Stefan gates each merge.** Full plan-of-plans + locked decisions: auto-memory `project_v1-hardening-audit-2026-06-10`.
 
