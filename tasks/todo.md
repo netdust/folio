@@ -136,3 +136,13 @@ virtualization · a11y (32) · reapStalePendingOps chunking · auth_rate_limits 
 - [ ] S1 (BOTH reviewers): server-side scheme reject on field write (defense-in-depth) — DO THIS when a 2nd image renderer lands (e.g. a table-grid image cell), so the client guard isn't the only defense. Today client-only is accepted (server never dereferences; the one renderer makes unsafe schemes inert).
 - [ ] S2: <img> onError → "(no image)" fallback (polish; matches UrlField's dead-link behavior). Optional.
 - [ ] S3: image inference is path-based (query-param image URLs without extension → url). Deliberate trade-off; do NOT "fix" into over-matching.
+
+### Cluster 4 (calendar view) — DONE, at STANDARD REVIEW GATE (Stefan sign-off)
+- [x] 3.1 calendar-grid pure date math, TZ-safe (Date.UTC + ISO-slice), verified ×3 under UTC-8/+14 (`86469073`)
+- [x] 3.2 calendar-view render: month grid + nav + slideover + unscheduled tray + empty/error/skeleton (`9867dbaf`)
+- [x] 3.3 drag-to-reschedule writes frontmatter[dateField] to the DOCUMENT not the view (invariant 16 asserted) (`b48860a5`)
+- [x] 3.4 wire calendar → CalendarView in viewRouter (`593753d4`)
+- [x] STANDARD panel: generalist (invariant-16 trigger did NOT fire; TZ-safe; 0 Crit/0 Imp) + simplicity (Low). 
+- [x] review simplifications (`eb774762`): export bucketKey → collapse 3 byDay scans to O(1) · delete dead dayOf · remove unused buildWeekGrid (YAGNI)
+- FINAL: web 1031 / server 1915 / shared 82, 0 fail · tsc clean all 3.
+- DEFERRED: real-browser pointer-drag (jsdom can't drive it; synthetic onDragEnd only) → Playwright spec, same as kanban [backlog]. a11y: doc-chip drag aria-roledescription [later a11y pass].
