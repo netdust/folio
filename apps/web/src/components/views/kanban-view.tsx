@@ -61,9 +61,7 @@ interface Props {
 // drag-just-started frame) so callers never crash. Shared by onDragEnd + onDragOver.
 function dropEdgeFromEvent(event: DragMoveEvent | DragEndEvent): CardEdge {
   const overRect = event.over?.rect;
-  // Optional-chain the WHOLE rect path: synthetic drags in tests (and the
-  // drag-just-started frame) have no `active.rect.current` at all — reading
-  // `.current` directly throws. Missing rects → 'bottom' fallback.
+  // Fully optional-chained: synthetic/just-started drags lack the rect path.
   const activeRect = event.active?.rect?.current?.translated;
   if (!overRect || !activeRect) return 'bottom';
   const activeCenterY = activeRect.top + activeRect.height / 2;
@@ -266,9 +264,14 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
   // Live insertion feedback. Sets indicator STATE only — NEVER mutates a column
   // array. Over a card → a line on the nearest edge; over a column droppable
   // (empty/whitespace) → no line (the column's own isOver highlight handles it).
+  // Classify column-vs-card by the droppable's OWN data (`columnValue` is set
+  // only on column droppables, kanban-column.tsx) rather than an `id` string
+  // prefix — no shared magic prefix to drift. (onDragEnd still parses the value
+  // out of the `col-` id, which it needs; this is the read-only classification.)
   const onDragOver = (event: DragOverEvent) => {
     const { over } = event;
-    if (!over || String(over.id).startsWith('col-')) {
+    const overIsColumn = over?.data.current?.columnValue !== undefined;
+    if (!over || overIsColumn) {
       setDropIndicator(null);
       return;
     }
