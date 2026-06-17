@@ -135,7 +135,6 @@ function setup(viewSettings?: Record<string, unknown>) {
           // Deterministic scale window so column-bucketed assertions don't depend
           // on today's date. Spans June 2026 — the test docs' dates fall inside.
           initialRange={{ start: '2026-06-01', end: '2026-06-30' }}
-          {...(viewSettings ? {} : {})}
         />
       );
     },

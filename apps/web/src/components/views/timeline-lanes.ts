@@ -10,30 +10,7 @@
 // field-infer do (a datetime is sliced to its YYYY-MM-DD prefix; non-string /
 // empty / malformed values are date-less).
 import { bucketKey } from './calendar-grid.ts';
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** ISO 'YYYY-MM-DD' for a UTC epoch-ms value, derived deterministically. */
-function isoOf(utcMs: number): string {
-  return new Date(utcMs).toISOString().slice(0, 10);
-}
-
-/**
- * Monday-start weekday index (0 = Monday .. 6 = Sunday) for a UTC epoch-ms value.
- * getUTCDay() is 0 = Sunday .. 6 = Saturday, so shift by 6 mod 7.
- */
-function mondayIndex(utcMs: number): number {
-  return (new Date(utcMs).getUTCDay() + 6) % 7;
-}
-
-/** UTC midnight epoch-ms for a 'YYYY-MM-DD' string. */
-function msOf(iso: string): number {
-  const parts = iso.split('-');
-  const y = Number(parts[0]);
-  const m = Number(parts[1]);
-  const d = Number(parts[2]);
-  return Date.UTC(y, m - 1, d);
-}
+import { DAY_MS, isoOf, mondayIndex, msOfIso } from './date-utils.ts';
 
 const MONTH_LABELS = [
   'January',
@@ -92,8 +69,8 @@ export function buildTimeScale(
   rangeEnd: string,
   zoom: TimelineZoom,
 ): TimeColumn[] {
-  const startMs = msOf(rangeStart);
-  const endMs = msOf(rangeEnd);
+  const startMs = msOfIso(rangeStart);
+  const endMs = msOfIso(rangeEnd);
   if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs < startMs) return [];
 
   const columns: TimeColumn[] = [];

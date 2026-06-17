@@ -19,6 +19,7 @@ import { useUpdateView } from '../../lib/api/views.ts';
 import { type DueUrgency, dueUrgency } from '../../lib/due-urgency.ts';
 import { cn } from '../ui/cn.ts';
 import { bucketKey } from './calendar-grid.ts';
+import { DAY_MS, isoOf, msOfIso } from './date-utils.ts';
 import { EmptyState } from './empty-state.tsx';
 import {
   type TimeColumn,
@@ -43,7 +44,6 @@ interface Props {
 
 const ZOOMS: TimelineZoom[] = ['day', 'week', 'month'];
 const ZOOM_LABELS: Record<TimelineZoom, string> = { day: 'Day', week: 'Week', month: 'Month' };
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Narrow an unknown settings value to a non-empty string, else fall back. */
 function settingString(value: unknown, fallback: string): string {
@@ -65,17 +65,6 @@ function barAccent(u: DueUrgency): string {
     default:
       return 'bg-card border-border-light text-fg-2';
   }
-}
-
-/** ISO 'YYYY-MM-DD' for a UTC-midnight epoch-ms value. */
-function isoOf(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10);
-}
-
-/** UTC-midnight epoch-ms for a 'YYYY-MM-DD' string. */
-function msOfIso(iso: string): number {
-  const [y, m, d] = iso.split('-').map(Number);
-  return Date.UTC(y ?? 0, (m ?? 1) - 1, d ?? 1);
 }
 
 /** Whole-day delta (b - a) between two 'YYYY-MM-DD' strings, UTC-safe. */
@@ -112,8 +101,8 @@ function computeRange(
   if (min === null || max === null) return null;
   // Pad one day each side so edge bars aren't flush against the boundary.
   return {
-    start: isoOf(new Date(`${min}T00:00:00Z`).getTime() - DAY_MS),
-    end: isoOf(new Date(`${max}T00:00:00Z`).getTime() + DAY_MS),
+    start: isoOf(msOfIso(min) - DAY_MS),
+    end: isoOf(msOfIso(max) + DAY_MS),
   };
 }
 

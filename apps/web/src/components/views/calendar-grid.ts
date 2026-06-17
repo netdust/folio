@@ -6,6 +6,8 @@
 // classic calendar off-by-one-day bug). Week starts on Monday — Folio is
 // EU/Dutch.
 
+import { DAY_MS, isoOf, mondayIndex } from './date-utils.ts';
+
 // Mirror packages/shared/src/field-infer.ts so calendar placement recognizes the
 // same date / datetime surface the rest of Folio infers. A value matching
 // neither (or empty / non-string) is unscheduled.
@@ -19,21 +21,6 @@ export interface DayCell {
   day: number;
   /** false for leading/trailing filler days from the adjacent month */
   inMonth: boolean;
-}
-
-/**
- * Monday-start weekday index (0 = Monday .. 6 = Sunday) for a UTC epoch-ms value.
- * getUTCDay() is 0 = Sunday .. 6 = Saturday, so shift by 6 mod 7.
- */
-function mondayIndex(utcMs: number): number {
-  return (new Date(utcMs).getUTCDay() + 6) % 7;
-}
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** ISO 'YYYY-MM-DD' for a UTC epoch-ms value, derived deterministically. */
-function isoOf(utcMs: number): string {
-  return new Date(utcMs).toISOString().slice(0, 10);
 }
 
 /**
