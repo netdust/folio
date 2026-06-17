@@ -67,18 +67,24 @@
 
 # CHUNK B — Filter + per-view controls on every view (STANDARD)
 
-> Every view gets a filter (server `?filter=`) + its own controls component (like BoardControls). Filter is universal; settings are per-view.
+> Every view gets a filter + an INLINE TOOLBAR of per-view settings that EDIT THE ACTIVE VIEW LIVE (persist via useUpdateView). The gap Stefan flagged: list/table show a filter but you can't change group-by/sort/aggregates after create; calendar/timeline have no filter + no settings.
 
-### Task B.1: `ViewFilterBar` — shared filter control (Tier A)
-**Files:** Create `apps/web/src/components/views/view-filter-bar.tsx` + test.
-- A filter control that reads/writes the URL `?filter=` (the existing `tableSearchSchema` already carries filter keys: status/priority/labels/assignee/updated_since + the generic frontmatter `filter=`). It offers add/remove filter conditions (field + operator + value), serializes to the `?filter=` param the server reads (the M3 path). Reuse the existing filter compiler's operator set (`@folio/shared` `OPERATORS`) so the UI can't build an op the server rejects (sibling-site, like the aggregate whitelist).
-- **Tier-A slice:** a filter condition serializes to the exact `?filter=<JSON>` the server's `filterCompile` reads; the same filter object feeds `useDocuments`/`useInfiniteDocuments` AND `useGroupSummary` so rows + aggregates stay consistent. Assert the serialization round-trips.
-- **Step 2.5 (controller, at dispatch):** ground-truth the EXACT current filter surface — how `tableSearchSchema` carries filter keys, how TableView already reads `?filter=` (M3's `useInfiniteDocuments(... params.filter)`), and the `OPERATORS` export — so the bar writes the format the server already accepts. (The table ALREADY filters via M3; this surfaces a UI for it + extends it to the other views.)
+**KEY GROUND-TRUTH (controller, 2026-06-17): the filter UI ALREADY EXISTS.** `apps/web/src/components/filter/filter-bar.tsx` — `FilterBar({ clauses, statuses, pinnedFields, onChange })` — is used by TableView (line 608) with `clauses = parseFilters(search)` + `onChange = onClauseChange` (writes `?filter=` via the URL search). So B.1 is **REUSE FilterBar on the other views, NOT build a new one.** The wiring helpers (`parseFilters`, `clausesToListParams`, `FilterClauseUrl`) live in `lib/api/documents.ts`. **Also dead-code: `apps/web/src/components/views/list-view.tsx` is the orphaned pre-Phase-6 list route (no non-test importer; router routes `list`→TableView now) — DELETE it + its 2 tests as cleanup.**
 
-### Task B.2: per-view controls components (Tier B shells + Tier-A persistence slices)
-**Files:** Create `table-controls.tsx`, `calendar-controls.tsx`, `timeline-controls.tsx`, `list-controls.tsx` (or fold list's into grouped-list-config); each renders `<ViewFilterBar>` + its view-specific settings. Wire each into its renderer's toolbar slot.
-- **table** → ViewFilterBar + sort (TableHeader already does column sort; the controls add the filter; sort persists to `settings`/`sort` via useUpdateView — already wired).
-- **list** → ViewFilterBar + group-by picker + aggregate builder (reuse `GroupedListConfig`'s group-by/aggregate UI as an EDIT affordance on the active view, persisting to `settings` via useUpdateView). 
+**Decisions (Stefan, 2026-06-17):** (D-B1) controls live in an INLINE TOOLBAR above each view (like BoardControls), always visible, editing the active view live. (D-B2) the SAME FilterBar appears on ALL views (calendar + timeline included).
+
+### Task B.1: reuse `FilterBar` on calendar + timeline + kanban (Tier B wiring + filter→data Tier-A slice)
+**Files:** `calendar-view.tsx`, `timeline-view.tsx`, the kanban toolbar (`w.$wslug.p.$pslug.tsx` BoardControls area or kanban-view), + tests. (Table + list already have FilterBar via TableView.)
+- Render the EXISTING `<FilterBar clauses={parseFilters(search)} statuses={statuses} pinnedFields={fields} onChange={onClauseChange} />` in each view's toolbar (mirror TableView's wiring exactly — `parseFilters`/`clausesToListParams` from `documents.ts`).
+- **Tier-A slice:** the filter clauses feed the view's `useDocuments`/`useInfiniteDocuments` (via `clausesToListParams`) AND (for the grouped list) `useGroupSummary`, so filtering narrows that view's items consistently. Assert: a filter clause → the view's doc query carries the `?filter=`; for list, the group-summary query carries the SAME filter.
+- **Step 2.5 (controller, at dispatch):** confirm FilterBar's props + the `parseFilters`/`clausesToListParams` signatures + how `statuses`/`fields` are fetched in each target view (calendar/timeline already call useDocuments; they need useStatuses/useFields for the FilterBar props — verify or add).
+
+### Task B.2: per-view INLINE settings controls — EDIT the active view live (Tier B shells + Tier-A persistence slices)
+> The gap Stefan flagged: "once a view is created I can't change the settings." So these controls EDIT THE ACTIVE VIEW (persist via `useUpdateView` on change), not just create-time. Inline toolbar, like BoardControls. Mirror `apps/web/src/components/kanban/board-controls.tsx` (it already does exactly this: reads `activeView`, renders group-by/sort selects, persists to the view via `useUpdateView`).
+**Files:** Create the per-view controls (e.g. `list-controls.tsx`, `calendar-controls.tsx`, `timeline-controls.tsx`); each renders FilterBar (B.1) + its view-specific setting pickers, editing the active view. Wire into each renderer's toolbar.
+- **list** (grouped TableView) → a group-by `<select>` + an aggregate editor (reuse `GroupedListConfig`'s group-by + aggregate-builder UI, but as an EDIT affordance bound to the active view's `settings`, persisting on change via `useUpdateView` — the same `settings.{groupBy,aggregates}` the new-view sheet writes at create). This is THE fix for "can't change list settings after create."
+- **calendar** → a date-field `<select>` editing `settings.dateField`, persist via useUpdateView.
+- **timeline** → the zoom toggle (ALREADY in TimelineView via useUpdateView — keep) + start/end date-field pickers editing `settings.{startField,endField}`.
 - **calendar** → ViewFilterBar + date-field picker (persists `settings.dateField` via useUpdateView).
 - **timeline** → ViewFilterBar + the zoom toggle (already exists in TimelineView — move/keep) + start/end date-field pickers (persist `settings.{startField,endField}`).
 - **kanban** → BoardControls EXISTS; just add `<ViewFilterBar>` to it.
