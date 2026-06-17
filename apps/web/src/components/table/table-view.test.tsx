@@ -10,7 +10,7 @@ import {
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { TableView, sameSearchValue } from './table-view.tsx';
+import { TableView, bucketValue, sameSearchValue } from './table-view.tsx';
 
 // Import the same Zod schema the production work-items route uses so the
 // test harness's strip/accept behavior tracks production exactly.
@@ -101,6 +101,38 @@ describe('sameSearchValue', () => {
   it('rejects array-vs-scalar mismatch', () => {
     expect(sameSearchValue(['todo'], 'todo')).toBe(false);
     expect(sameSearchValue('todo', ['todo'])).toBe(false);
+  });
+});
+
+describe('bucketValue', () => {
+  const doc = (frontmatter: Record<string, unknown>, status: string | null = 'x') =>
+    ({
+      id: 'd',
+      slug: 'd',
+      type: 'work_item' as const,
+      title: 'd',
+      status,
+      parentId: null,
+      frontmatter,
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    }) as Parameters<typeof bucketValue>[0];
+
+  it('normalizes a boolean groupBy value to the server json_extract representation (1/0)', () => {
+    // S1: the server groups a BOOLEAN frontmatter field via json_extract, which
+    // yields 1/0 → the summary group value is "1"/"0". The client reads the JS
+    // boolean `true`; `String(true)` = "true" MISMATCHES "1", so those rows land
+    // in no section. Normalize to '1'/'0' so the bucket matches the endpoint.
+    expect(bucketValue(doc({ done: true }), 'done')).toBe('1');
+    expect(bucketValue(doc({ done: false }), 'done')).toBe('0');
+  });
+
+  it('still stringifies string/number group values and nulls empty/missing', () => {
+    expect(bucketValue(doc({ amount: 1250 }), 'amount')).toBe('1250');
+    expect(bucketValue(doc({ org: 'VAD' }), 'org')).toBe('VAD');
+    expect(bucketValue(doc({}, 'todo'), 'status')).toBe('todo');
+    expect(bucketValue(doc({ org: '' }), 'org')).toBeNull();
+    expect(bucketValue(doc({}), 'missing')).toBeNull();
   });
 });
 
@@ -2380,5 +2412,75 @@ describe('TableView grouped (list view)', () => {
     await waitFor(() => expect(screen.getByText('Done one')).toBeInTheDocument());
     // Flat: rows render, but NO group section headers exist.
     expect(screen.queryByTestId(/^group-header-row-/)).toBeNull();
+  });
+
+  // FIX I1 (named-acceptance REGRESSION): when the group-summary endpoint FAILS
+  // on a list view, the user must get an ERROR AFFORDANCE — not a silent degrade
+  // to a flat, ungrouped view with no signal. The rows still load and render.
+  it('surfaces a group-summary error affordance (and still renders rows) when /group-summary fails', async () => {
+    const failingFetch = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+      const json = (body: unknown, status = 200) =>
+        new Response(JSON.stringify(body), {
+          status,
+          headers: { 'content-type': 'application/json' },
+        });
+      if (u.includes('/statuses') && method === 'GET')
+        return json({ data: [todoStatus, doneStatus] });
+      if (u.includes('/fields') && method === 'GET') return json({ data: [] });
+      if (u.includes('/views') && method === 'GET') return json({ data: [listView] });
+      if (u.includes('/tables') && method === 'GET') return json({ data: [] });
+      // The group-summary read 500s — the failure I1 must surface.
+      if (u.includes('/group-summary') && method === 'GET')
+        return json({ error: { code: 'internal', message: 'boom' } }, 500);
+      if (u.includes('/documents') && method === 'GET')
+        return json({ data: { data: LOADED, nextCursor: null } });
+      return json({});
+    });
+    vi.stubGlobal('fetch', failingFetch);
+
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    // The error affordance is present...
+    const banner = await screen.findByTestId('group-summary-error');
+    expect(banner).toBeInTheDocument();
+    // ...AND the loaded rows still render (degraded grouping, not a blank table).
+    expect(screen.getByText('Done one')).toBeInTheDocument();
+    expect(screen.getByText('Todo one')).toBeInTheDocument();
+  });
+
+  // FIX I2 (edge REGRESSION): when the endpoint caps groups it sets truncated:true;
+  // the user must see a "more groups exist" note (the old renderer's signal),
+  // not a silent drop.
+  it('renders a truncation note when the endpoint reports truncated groups', async () => {
+    const truncatedSummary = { ...SUMMARY, truncated: true };
+    vi.stubGlobal('fetch', makeGroupedFetch(listView, truncatedSummary));
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByTestId('groups-truncated')).toBeInTheDocument();
+  });
+
+  it('does NOT render the truncation note when truncated is false', async () => {
+    vi.stubGlobal('fetch', makeGroupedFetch(listView));
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Done one')).toBeInTheDocument());
+    expect(screen.queryByTestId('groups-truncated')).toBeNull();
   });
 });

@@ -86,11 +86,18 @@ function resolveGroupSettings(settings: Record<string, unknown> | undefined): Gr
  * The group value a loaded row falls under — DISPLAY placement only. `status`
  * reads the column; any other key reads frontmatter. Empty/missing → `null`
  * (the ungrouped bucket).
+ *
+ * Exported for direct unit tests.
  */
-function bucketValue(doc: DocumentSummary, groupBy: string): string | null {
+export function bucketValue(doc: DocumentSummary, groupBy: string): string | null {
   const raw =
     groupBy === 'status' ? doc.status : (doc.frontmatter as Record<string, unknown>)[groupBy];
   if (raw === null || raw === undefined || raw === '') return null;
+  // S1: a BOOLEAN groupBy field is read server-side via json_extract, which
+  // yields 1/0 — so the summary group VALUE is "1"/"0". The client holds the JS
+  // boolean here; `String(true)` = "true" would MISMATCH "1" and orphan the row
+  // (it would land in no section). Normalize to the server's representation.
+  if (typeof raw === 'boolean') return raw ? '1' : '0';
   return String(raw);
 }
 
@@ -477,26 +484,41 @@ export function TableView({ wslug, pslug, tslug }: Props) {
     });
   }, []);
 
-  // Bucket the LOADED rows by their groupBy value — DISPLAY placement only; the
-  // header count never comes from these (the page-2 guard).
-  const rowsByGroup = useMemo(() => {
-    const map = new Map<string | null, DocumentSummary[]>();
-    if (!groupBy) return map;
-    for (const doc of filteredDocs) {
-      const key = bucketValue(doc, groupBy);
-      const existing = map.get(key);
-      if (existing) existing.push(doc);
-      else map.set(key, [doc]);
-    }
-    return map;
-  }, [filteredDocs, groupBy]);
-
   // Grouping only actually renders sections when the endpoint returned groups (or
   // an ungrouped bucket). While the summary is loading/empty/errored we fall back
   // to the flat list so the table is never blank.
   const summaryGroups = groupSummary.data?.groups ?? [];
   const summaryUngrouped = groupSummary.data?.ungrouped ?? null;
   const renderGrouped = grouping && (summaryGroups.length > 0 || summaryUngrouped !== null);
+
+  // FIX I1: when the group-summary read FAILS on a list view, surface an error
+  // affordance — do NOT silently degrade to a flat, ungrouped view with no
+  // signal. The rows still load (the flat fallback below renders them).
+  const groupSummaryError = grouping && groupSummary.isError;
+
+  // Bucket the LOADED rows by their groupBy value — DISPLAY placement only; the
+  // header count never comes from these (the page-2 guard).
+  //
+  // FIX I2 (orphan fold): when the endpoint truncates the group set (>MAX_GROUPS
+  // distinct values → truncated:true), a loaded row whose group was capped away
+  // has NO matching header, so its own map entry would never be iterated and the
+  // row would silently vanish. Fold any such orphan into the ungrouped (`null`)
+  // bucket so it always renders SOMEWHERE rather than disappearing.
+  const rowsByGroup = useMemo(() => {
+    const map = new Map<string | null, DocumentSummary[]>();
+    if (!groupBy) return map;
+    const known = new Set(summaryGroups.map((g) => g.value));
+    for (const doc of filteredDocs) {
+      const raw = bucketValue(doc, groupBy);
+      // A non-null value with no matching summary header is an orphan (its group
+      // was truncated away) → fold into the ungrouped bucket so it never drops.
+      const key = raw !== null && !known.has(raw) ? null : raw;
+      const existing = map.get(key);
+      if (existing) existing.push(doc);
+      else map.set(key, [doc]);
+    }
+    return map;
+  }, [filteredDocs, groupBy, summaryGroups]);
 
   const docs = pageData;
 
@@ -651,6 +673,14 @@ export function TableView({ wslug, pslug, tslug }: Props) {
               }
             />
           ) : null}
+          {/* FIX I1: group-summary failure affordance. The rows still render
+              (flat fallback below) so the table is never blank — this banner is
+              the SIGNAL that grouping/aggregates failed. */}
+          {groupSummaryError ? (
+            <div data-testid="group-summary-error" className="px-4 py-2 text-sm text-danger">
+              Kon de groepssamenvatting niet laden.
+            </div>
+          ) : null}
           <div role="list" className="flex flex-col">
             {renderGrouped
               ? (() => {
@@ -702,6 +732,15 @@ export function TableView({ wslug, pslug, tslug }: Props) {
                           {!collapsedGroups.has(NO_GROUP_KEY)
                             ? (rowsByGroup.get(null) ?? []).map(renderRow)
                             : null}
+                        </div>
+                      ) : null}
+                      {/* FIX I2: the endpoint capped the distinct group set
+                          (truncated:true) — signal that more groups exist so the
+                          user knows the sections aren't the complete picture. */}
+                      {groupSummary.data?.truncated ? (
+                        <div data-testid="groups-truncated" className="px-4 py-2 text-xs text-fg-3">
+                          Showing the first groups — more groups exist (refine the grouping to see
+                          all).
                         </div>
                       ) : null}
                     </>

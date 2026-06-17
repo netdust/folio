@@ -41,36 +41,24 @@ function formatScalar(n: number): string {
 }
 
 interface Props {
-  /** The group's display label (the group value, or the "no group" label). */
-  label: string;
   /** Stable testid suffix (the group value, or `__nogroup__`). */
   groupKey: string;
   /** The summary row from the endpoint — the SOURCE OF TRUTH for count + aggregates. */
   row: GroupSummaryRow;
   /** The configured aggregates (drives which stats render, in order). */
   aggregates: AggregateSpec[];
-  /**
-   * Whether to render the leading label + "N items" count. Defaults to `true`
-   * (the standalone grouped-list consumer). The grouped-TABLE section header
-   * (GroupHeaderRow) owns the label+count on its own LEFT side and passes
-   * `false` so they are not doubled.
-   */
-  showLabelAndCount?: boolean;
 }
 
 /**
- * A group section header: the group value, the FULL-set item count, and the
- * configured aggregate stats (incl. any distribution bar). Every number here
- * comes from `row` (the group-summary endpoint), NEVER from a client count of
- * the loaded rows — that is the page-2-bug guard.
+ * The RIGHT side of a grouped-table section header: the configured aggregate
+ * stats (scalar chips + any distribution bar). Every number here comes from
+ * `row` (the group-summary endpoint), NEVER from a client count of the loaded
+ * rows — that is the page-2-bug guard.
+ *
+ * The group label + full-set count are owned by the SOLE consumer
+ * (GroupHeaderRow) on its own LEFT side, so they are NOT rendered here.
  */
-export function GroupAggregateHeader({
-  label,
-  groupKey,
-  row,
-  aggregates,
-  showLabelAndCount = true,
-}: Props) {
+export function GroupAggregateHeader({ groupKey, row, aggregates }: Props) {
   const distributions = aggregates.filter((a) => a.op === 'distribution');
   const scalars = aggregates.filter((a) => a.op !== 'distribution' && a.op !== 'count');
 
@@ -80,12 +68,6 @@ export function GroupAggregateHeader({
       className="flex flex-col gap-1.5 border-b border-border-light px-1 pb-2"
     >
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        {showLabelAndCount ? (
-          <>
-            <span className="text-sm font-medium text-fg">{label}</span>
-            <span className="text-xs text-fg-3">{row.count} items</span>
-          </>
-        ) : null}
         {scalars.map((spec) => {
           const k = aggregateKey(spec);
           const val = row.aggregates[k];

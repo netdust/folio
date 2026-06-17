@@ -68,11 +68,9 @@ export function GroupHeaderRow({ label, groupBy, row, aggregates, collapsed, onT
       {rightAggregates.length > 0 ? (
         <div className="flex flex-shrink-0 items-center justify-end">
           <GroupAggregateHeader
-            label=""
             groupKey={row.value ?? '__nogroup__'}
             row={row}
             aggregates={rightAggregates}
-            showLabelAndCount={false}
           />
         </div>
       ) : null}
