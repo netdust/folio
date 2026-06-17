@@ -1,5 +1,8 @@
-import { render } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import type { ReactNode } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
 import type { Column } from './columns.ts';
 import { TableCell } from './table-cell.tsx';
@@ -193,5 +196,94 @@ describe('TableCell urgency', () => {
     );
     expect(container.querySelector('.text-danger')).toBeNull();
     expect(container.querySelector('.text-warning')).toBeNull();
+  });
+});
+
+describe('TableCell assignee column', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function wrap(qc: QueryClient) {
+    return ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+  }
+
+  function stubFetch() {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo) => {
+        const url = String(input);
+        if (url.includes('/members')) {
+          return json({
+            members: [
+              { id: 'u1', email: 'alice@test', name: 'Alice', role: 'owner' },
+              { id: 'u2', email: 'bob@test', name: 'Bob', role: 'member' },
+            ],
+          });
+        }
+        if (url.includes('/projects')) {
+          return json([
+            {
+              id: 'pid-web',
+              workspaceId: 'w1',
+              slug: 'web',
+              name: 'Web',
+              icon: null,
+              description: null,
+            },
+          ]);
+        }
+        if (url.includes('/documents?type=agent')) {
+          return json([]);
+        }
+        return json({ members: [] });
+      }),
+    );
+  }
+
+  function json(data: unknown): Response {
+    return new Response(JSON.stringify({ data }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+
+  const assigneeColumn: Column = {
+    key: 'assignee',
+    label: 'Assignee',
+    source: 'field',
+    fieldType: 'user_ref',
+    fieldOptions: null,
+  };
+
+  it('renders the AssigneePicker (not a plain text input) and commits via onFieldCommit', async () => {
+    stubFetch();
+    const onFieldCommit = vi.fn();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <TableCell
+        column={assigneeColumn}
+        doc={makeDoc({ assignee: '' })}
+        statuses={[]}
+        wslug="acme"
+        pslug="web"
+        isPending={false}
+        onOpen={noop}
+        onTitleCommit={noop}
+        onStatusCommit={noop}
+        onFieldCommit={onFieldCommit}
+      />,
+      { wrapper: wrap(qc) },
+    );
+
+    // The picker trigger — NOT a plain InlineEdit textbox for the assignee value.
+    const trigger = await screen.findByRole('button', { name: /unassigned/i });
+    expect(screen.queryByRole('textbox')).toBeNull();
+
+    await userEvent.click(trigger);
+    await userEvent.click(await screen.findByRole('button', { name: /Alice alice@test/i }));
+    expect(onFieldCommit).toHaveBeenCalledWith('x', 'assignee', 'alice@test');
   });
 });
