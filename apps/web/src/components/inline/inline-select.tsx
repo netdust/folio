@@ -1,6 +1,7 @@
 import { type ReactNode, useState } from 'react';
 import { cn } from '../ui/cn.ts';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
+import { EditableShell } from './editable-shell.tsx';
 
 export interface SelectOption {
   value: string;
@@ -34,23 +35,22 @@ export function InlineSelect({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            'inline-flex cursor-pointer items-center rounded-sm px-1.5 py-0.5 text-xs hover:bg-card',
-            isPending && 'opacity-60',
-            className,
-          )}
-        >
-          {renderDisplay ? (
-            renderDisplay(current)
-          ) : current ? (
-            <span style={current.color ? { color: current.color } : undefined}>
-              {current.label}
-            </span>
-          ) : (
-            <span className="text-fg-3">{placeholder ?? 'select…'}</span>
-          )}
+        <button type="button" className="cursor-pointer">
+          <EditableShell
+            mode="display"
+            isPending={isPending}
+            className={cn('inline-flex items-center', className)}
+          >
+            {renderDisplay ? (
+              renderDisplay(current)
+            ) : current ? (
+              <span style={current.color ? { color: current.color } : undefined}>
+                {current.label}
+              </span>
+            ) : (
+              <span className="text-fg-3">{placeholder ?? 'select…'}</span>
+            )}
+          </EditableShell>
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="min-w-[180px] p-1">
