@@ -1,9 +1,9 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
+import { stubFetch, wrap } from '../assignee/test-fixtures.tsx';
 import type { Column } from './columns.ts';
 import { TableCell } from './table-cell.tsx';
 
@@ -203,52 +203,6 @@ describe('TableCell assignee column', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
-
-  function wrap(qc: QueryClient) {
-    return ({ children }: { children: ReactNode }) => (
-      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
-    );
-  }
-
-  function stubFetch() {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo) => {
-        const url = String(input);
-        if (url.includes('/members')) {
-          return json({
-            members: [
-              { id: 'u1', email: 'alice@test', name: 'Alice', role: 'owner' },
-              { id: 'u2', email: 'bob@test', name: 'Bob', role: 'member' },
-            ],
-          });
-        }
-        if (url.includes('/projects')) {
-          return json([
-            {
-              id: 'pid-web',
-              workspaceId: 'w1',
-              slug: 'web',
-              name: 'Web',
-              icon: null,
-              description: null,
-            },
-          ]);
-        }
-        if (url.includes('/documents?type=agent')) {
-          return json([]);
-        }
-        return json({ members: [] });
-      }),
-    );
-  }
-
-  function json(data: unknown): Response {
-    return new Response(JSON.stringify({ data }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    });
-  }
 
   const assigneeColumn: Column = {
     key: 'assignee',

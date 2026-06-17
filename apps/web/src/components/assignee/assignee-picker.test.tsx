@@ -1,88 +1,19 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient } from '@tanstack/react-query';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AssigneePicker } from './assignee-picker.tsx';
+import {
+  agentsResponse,
+  memberResponse,
+  projectsResponse,
+  stubFetch,
+  wrap,
+} from './test-fixtures.tsx';
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
-
-function wrap(qc: QueryClient) {
-  return ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={qc}>{children}</QueryClientProvider>
-  );
-}
-
-function stubFetch(handlers: Record<string, () => Response>) {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async (input: RequestInfo) => {
-      const url = String(input);
-      for (const [match, build] of Object.entries(handlers)) {
-        if (url.includes(match)) return build();
-      }
-      return new Response(JSON.stringify({ data: { members: [] } }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    }),
-  );
-}
-
-const memberResponse = () =>
-  new Response(
-    JSON.stringify({
-      data: {
-        members: [
-          { id: 'u1', email: 'alice@test', name: 'Alice', role: 'owner' },
-          { id: 'u2', email: 'bob@test', name: 'Bob', role: 'member' },
-        ],
-      },
-    }),
-    { status: 200, headers: { 'content-type': 'application/json' } },
-  );
-
-// Phase 2.5: workspace-scoped agent list — single { data: [] } envelope.
-const agentsResponse = () =>
-  new Response(
-    JSON.stringify({
-      data: [
-        {
-          id: 'd1',
-          slug: 'triage-bot',
-          type: 'agent',
-          title: 'Triage Bot',
-          status: null,
-          parentId: null,
-          frontmatter: { projects: ['*'] },
-          createdAt: '2026-05-25T00:00:00.000Z',
-          updatedAt: '2026-05-25T00:00:00.000Z',
-          lastTouchedAt: null,
-        },
-      ],
-    }),
-    { status: 200, headers: { 'content-type': 'application/json' } },
-  );
-
-// useProjects(wslug) — needed so the picker can resolve pslug → project id.
-const projectsResponse = () =>
-  new Response(
-    JSON.stringify({
-      data: [
-        {
-          id: 'pid-web',
-          workspaceId: 'w1',
-          slug: 'web',
-          name: 'Web',
-          icon: null,
-          description: null,
-        },
-      ],
-    }),
-    { status: 200, headers: { 'content-type': 'application/json' } },
-  );
 
 describe('AssigneePicker', () => {
   it('renders sections for Members and Agents and lists each', async () => {
