@@ -52,9 +52,16 @@ export function EditableShell({
         // Smooth hover-bg (locked refined-motion decision) — transition-colors
         // does NOT change box metrics.
         'transition-colors duration-150 ease-out',
-        // Mode treatment — focus-ring / hover affordance ONLY, never box metrics.
+        // Mode treatment — background affordance ONLY, never box metrics.
+        // Display hints editability on hover; edit lifts onto a faint card bg
+        // with NO border/ring (the bg lift is the whole "you're editing" signal
+        // — a ring/border read too heavy). The global `*:focus-visible` rule in
+        // globals.css paints a box-shadow ring on the focused child input, which
+        // `outline-none` does NOT suppress — so kill it for the shell's inputs
+        // via the descendant variant, keeping edit mode ring-free.
         mode === 'display' && 'hover:bg-card',
-        mode === 'edit' && 'input-focus bg-card',
+        mode === 'edit' &&
+          'bg-card [&_input]:focus-visible:shadow-none [&_textarea]:focus-visible:shadow-none',
         align === 'right' && 'text-right',
         isPending && 'opacity-60',
         className,

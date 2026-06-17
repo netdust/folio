@@ -38,7 +38,7 @@ export function Pill({ category, label, variant = 'dot', className }: PillProps)
     return (
       <span
         className={cn(
-          'inline-flex items-center rounded-pill px-2 py-0.5 text-xs',
+          'inline-flex items-center rounded-pill px-2 py-0.5 text-sm',
           solidBg[category],
           textColor[category],
           className,
@@ -50,7 +50,7 @@ export function Pill({ category, label, variant = 'dot', className }: PillProps)
   }
   return (
     <span
-      className={cn('inline-flex items-center gap-1.5 text-xs', textColor[category], className)}
+      className={cn('inline-flex items-center gap-1.5 text-sm', textColor[category], className)}
     >
       <span className={cn('h-[7px] w-[7px] rounded-full', dotColor[category])} />
       {label}
