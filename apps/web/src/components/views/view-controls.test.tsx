@@ -216,8 +216,11 @@ describe('ViewControls', () => {
       expect(updateDocumentMutateSpy).not.toHaveBeenCalled();
     });
 
-    it('does NOT autosave a filter change without ?view= (ad-hoc, no consent)', async () => {
-      currentSearch = {}; // no ?view= → activeView is a fallback.
+    it('persists a filter change on a DEFAULT view (no ?view=) — matches settings persistence (Stefan 2026-06-17)', async () => {
+      // A default view (reached without ?view=) is the user's real working view;
+      // its filter must persist like its group-by/sort do (the old ?view=-only
+      // gate made settings persist but the filter not — an inconsistent split).
+      currentSearch = {}; // no ?view= → activeView is the default fallback.
       activeView = makeView({ id: 'v1', type: 'table' });
       renderControls();
 
@@ -225,9 +228,12 @@ describe('ViewControls', () => {
       await userEvent.click(await screen.findByText('Status'));
       await userEvent.click(await screen.findByText('Todo'));
 
-      // Navigated (URL changes), but the view was NOT mutated.
+      // URL updates AND the filter persists to the active VIEW — never a document.
       expect(navigateSpy).toHaveBeenCalled();
-      expect(mutateSpy).not.toHaveBeenCalled();
+      expect(mutateSpy).toHaveBeenCalled();
+      const [arg] = mutateSpy.mock.calls.at(-1) ?? [];
+      expect(arg).toMatchObject({ id: 'v1' });
+      expect(arg.patch).toHaveProperty('filters');
       expect(updateDocumentMutateSpy).not.toHaveBeenCalled();
     });
   });

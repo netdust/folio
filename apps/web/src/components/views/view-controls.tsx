@@ -100,9 +100,14 @@ export function ViewControls({ wslug, pslug, tslug }: Props) {
       }
     }
     void navigate({ to: '.', search: nextSearch, replace: false });
-    // Only autosave when the user has explicitly opened this view (?view=<id>).
-    // Without ?view=, activeView is a fallback — filter changes are ad-hoc.
-    if (urlViewId && activeView && activeView.id === urlViewId) {
+    // Persist the filter to the active view WHENEVER one is resolved — including
+    // the seeded DEFAULT view reached without `?view=`. The default view is the
+    // user's real working view, so its filter must survive a reload, exactly
+    // like the per-type settings (group-by/sort/aggregates) persist (invariant
+    // 16: view-owned config). This drops the old `?view=`-only gate (Stefan,
+    // 2026-06-17 — the gate made a default view's settings persist but its filter
+    // not, an inconsistent split on one control bar).
+    if (activeView) {
       updateView.mutate(
         { id: activeView.id, patch: { filters: flatFilters } },
         { onError: (err) => toast.error(formatApiError(err)) },
