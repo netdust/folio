@@ -1,7 +1,7 @@
 import type { AggregateSpec, GroupedListSettings } from '@folio/shared';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { Inbox } from 'lucide-react';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
   type DocumentPatch,
@@ -31,6 +31,7 @@ import { ColumnPicker } from './column-picker.tsx';
 import { columnSuggestions } from './column-suggestions.ts';
 import { ColumnTypeChange } from './column-type-change.tsx';
 import { type Column, applyColumnOrder, effectiveVisibleKeys, mergeColumns } from './columns.ts';
+import { setColumnSnapshot } from './current-columns-store.ts';
 import { type AddColumnPayload, TableAddColumn } from './table-add-column.tsx';
 import { TableAddRow } from './table-add-row.tsx';
 import { type SortState, TableHeader } from './table-header.tsx';
@@ -212,6 +213,16 @@ export function TableView({ wslug, pslug, tslug }: Props) {
     () => orderedColumns.filter((c) => visibleKeys.includes(c.key)),
     [orderedColumns, visibleKeys],
   );
+
+  // Publish the columns the user is CURRENTLY looking at to the cross-tree
+  // snapshot store, so the New-view sheet (in the rail, a render sibling) can
+  // seed a created view as a copy of this on-screen set + order. visibleColumns
+  // already encodes exactly what's rendered, so no re-resolution here; keyed by
+  // tslug so a view created from another table's rail row reads that table's set.
+  useEffect(() => {
+    const keys = visibleColumns.map((c) => c.key);
+    setColumnSnapshot(tslug, { visibleFields: keys, columnOrder: keys });
+  }, [tslug, visibleColumns]);
 
   const openDoc = (slug: string) => {
     void navigate({ to: '.', search: { ...search, doc: slug }, replace: false });
@@ -498,7 +509,12 @@ export function TableView({ wslug, pslug, tslug }: Props) {
             row's bottom border stopped where the viewport ended, leaving
             the rightmost columns visually unbordered when you horizontally
             scrolled. Bug E (2026-05-26). */}
-        <div className="w-max pr-[22px]">
+        {/* `min-w-full` raises the floor to the scroll container's width when
+            content is NARROWER than the viewport, so the table fills the dead
+            right space — without touching gridTemplate, so the fixed-px tracks +
+            flush borders are unchanged (Bug E intact). min-width only raises; the
+            wider `w-max` wins on horizontal overflow, so the two never conflict. */}
+        <div className="w-max min-w-full pr-[22px]">
           <TableHeader
             columns={visibleColumns}
             sort={sort}
