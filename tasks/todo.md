@@ -146,3 +146,16 @@ virtualization · a11y (32) · reapStalePendingOps chunking · auth_rate_limits 
 - [x] review simplifications (`eb774762`): export bucketKey → collapse 3 byDay scans to O(1) · delete dead dayOf · remove unused buildWeekGrid (YAGNI)
 - FINAL: web 1031 / server 1915 / shared 82, 0 fail · tsc clean all 3.
 - DEFERRED: real-browser pointer-drag (jsdom can't drive it; synthetic onDragEnd only) → Playwright spec, same as kanban [backlog]. a11y: doc-chip drag aria-roledescription [later a11y pass].
+
+### Cluster 5 (timeline view) — DONE, at STANDARD REVIEW GATE (Stefan sign-off)
+- [x] 4.1 timeline-lanes pure scale/range math, TZ-safe, verified ×3 LA/Tokyo/Kiritimati (`5c652792`)
+- [x] 4.2 timeline render + zoom toggle persists settings.zoom to the VIEW (invariant 16 view-side) (`73f405a2`)
+- [x] 4.3 range-preserving drag (start+end shift same day-delta, duration preserved) writes the DOCUMENT (invariant 16 doc-side) + router wire (`6db68429`)
+- [x] STANDARD panel: generalist (BOTH invariant-16 triggers CLEAR: zoom→view, drag→document; range-preservation UTC-safe; 0 Crit/0 Imp, merge-ready) + simplicity (Low).
+- [x] review simplifications (`bcb3ba9b`): extract shared date-utils.ts (DAY_MS/isoOf/msOfIso/mondayIndex were triplicated) · drop dead test no-op · converge computeRange idiom
+- FINAL: web 1064 / server 1915 / shared 82, 0 fail · tsc clean · TZ-determinism re-verified post-extraction.
+
+### Cluster 5 — deferred (optional)
+- [ ] Generalist #2 (medium): the single-date dateField precedence (fallback→start→end) is duplicated in placeOnTimeline AND the drag onDragEnd — latent-divergence smell. A shared resolveSingleDateField(frontmatter, fields) helper would converge the rule. Not a current bug (both consistent); do if the precedence ever changes.
+- [ ] Generalist #3: todayCol could reuse columnIndexFor (exported) for the same containment logic as bar placement. Consistency nit.
+- [ ] VERIFICATION GAP (both reviewers): the real pointer-drag is never driven (jsdom synthesizes onDragEnd) — drive ONE real timeline drag through Playwright/Chrome at /shakeout before merge. Same gap as calendar + kanban.
