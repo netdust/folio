@@ -221,6 +221,23 @@ function mergeFrontmatter(
   return out;
 }
 
+/**
+ * The cache under a list key can be EITHER shape, because two hooks share the
+ * key: `useDocuments` stores a plain `DocumentListPage` ({data,nextCursor}),
+ * while `useInfiniteDocuments` (what the table uses) stores an infinite page bag
+ * ({pages:[DocumentListPage], pageParams}). The optimistic handler must patch
+ * whichever is present — reading `.data` off the infinite shape is `undefined`
+ * and throws in onMutate, which silently ABORTS every edit (regression 2026-06-17).
+ */
+interface InfinitePages {
+  pages: DocumentListPage[];
+  pageParams: unknown[];
+}
+
+function isInfinitePages(v: unknown): v is InfinitePages {
+  return !!v && typeof v === 'object' && Array.isArray((v as InfinitePages).pages);
+}
+
 export function useUpdateDocument(
   wslug: string,
   pslug: string,
@@ -237,7 +254,7 @@ export function useUpdateDocument(
       await qc.cancelQueries({ queryKey: detailKey });
       await qc.cancelQueries({ queryKey: listKey });
       const prevDetail = qc.getQueryData<Document>(detailKey);
-      const prevList = qc.getQueryData<DocumentListPage>(listKey);
+      const prevList = qc.getQueryData<DocumentListPage | InfinitePages>(listKey);
       if (prevDetail) {
         qc.setQueryData<Document>(detailKey, {
           ...prevDetail,
@@ -245,8 +262,19 @@ export function useUpdateDocument(
           frontmatter: mergeFrontmatter(prevDetail.frontmatter, patch.frontmatter),
         });
       }
-      if (prevList) {
-        const patched = prevList.data.map((d) =>
+      // Bug 2 (2026-06-07): a board_position patch on a board_position-sorted
+      // list must RE-SORT optimistically. Otherwise the moved card keeps its
+      // old array slot until onSettled's refetch lands (~400ms), so it visibly
+      // sits in the wrong place (and the dragged-card animation looks like a
+      // snap-back). Re-sort ONLY when this is a board_position change on the
+      // manual-sort query — list-view / field-sorted queries derive their
+      // order from a DIFFERENT server key, so a status/title patch (or any
+      // patch on a non-board_position list) must NOT reorder.
+      const isBoardPositionReorder =
+        patch.boardPosition !== undefined && listParams.sort === 'board_position';
+      // Apply the patch (and optional re-sort) to one page's rows.
+      const patchPage = (page: DocumentListPage): DocumentListPage => {
+        const patched = page.data.map((d) =>
           d.slug === slug
             ? {
                 ...d,
@@ -255,20 +283,15 @@ export function useUpdateDocument(
               }
             : d,
         );
-        // Bug 2 (2026-06-07): a board_position patch on a board_position-sorted
-        // list must RE-SORT optimistically. Otherwise the moved card keeps its
-        // old array slot until onSettled's refetch lands (~400ms), so it visibly
-        // sits in the wrong place (and the dragged-card animation looks like a
-        // snap-back). Re-sort ONLY when this is a board_position change on the
-        // manual-sort query — list-view / field-sorted queries derive their
-        // order from a DIFFERENT server key, so a status/title patch (or any
-        // patch on a non-board_position list) must NOT reorder.
-        const isBoardPositionReorder =
-          patch.boardPosition !== undefined && listParams.sort === 'board_position';
-        qc.setQueryData<DocumentListPage>(listKey, {
+        return { ...page, data: isBoardPositionReorder ? sortByBoardPosition(patched) : patched };
+      };
+      if (isInfinitePages(prevList)) {
+        qc.setQueryData<InfinitePages>(listKey, {
           ...prevList,
-          data: isBoardPositionReorder ? sortByBoardPosition(patched) : patched,
+          pages: prevList.pages.map(patchPage),
         });
+      } else if (prevList) {
+        qc.setQueryData<DocumentListPage>(listKey, patchPage(prevList));
       }
       return { prevDetail, prevList, detailKey };
     },
