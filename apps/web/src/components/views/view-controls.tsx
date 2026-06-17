@@ -10,6 +10,7 @@ import { FilterBar } from '../filter/filter-bar.tsx';
 import { BoardControls } from '../kanban/board-controls.tsx';
 import { ListControls } from './list-controls.tsx';
 import { useViewFilterHydration } from './use-view-filter-hydration.ts';
+import { settingString } from './view-settings.ts';
 
 interface Props {
   wslug: string;
@@ -30,10 +31,6 @@ const ZOOM_LABELS: Record<(typeof TIMELINE_ZOOMS)[number], string> = {
 /** Project date/datetime fields — the candidate columns for calendar/timeline placement. */
 function dateFields(fields: Field[]): Field[] {
   return fields.filter((f) => f.type === 'date' || f.type === 'datetime');
-}
-
-function settingString(value: unknown, fallback: string): string {
-  return typeof value === 'string' && value !== '' ? value : fallback;
 }
 
 /**

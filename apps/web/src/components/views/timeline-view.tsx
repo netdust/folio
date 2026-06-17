@@ -27,6 +27,7 @@ import {
   placeOnTimeline,
 } from './timeline-lanes.ts';
 import { TimelineSkeleton } from './timeline-skeleton.tsx';
+import { settingString } from './view-settings.ts';
 
 interface Props {
   wslug: string;
@@ -39,11 +40,6 @@ interface Props {
    * it unset and the range is computed from the data.
    */
   initialRange?: { start: string; end: string };
-}
-
-/** Narrow an unknown settings value to a non-empty string, else fall back. */
-function settingString(value: unknown, fallback: string): string {
-  return typeof value === 'string' && value !== '' ? value : fallback;
 }
 
 /** Narrow settings.zoom to a valid TimelineZoom, defaulting to 'week'. */

@@ -10,7 +10,8 @@ import {
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { TableView, bucketValue, sameSearchValue } from './table-view.tsx';
+import { sameSearchValue } from '../views/use-view-filter-hydration.ts';
+import { TableView, bucketValue } from './table-view.tsx';
 
 // Import the same Zod schema the production work-items route uses so the
 // test harness's strip/accept behavior tracks production exactly.
@@ -271,186 +272,12 @@ describe('TableView', () => {
     expect(parsed.dir).toBe('asc');
   });
 
-  it('hydrates a view-saved sort key that is NOT in the URL validator enum', async () => {
-    // Saved views can store sort by any column key (incl. custom field keys
-    // like 'next_action_due'). The work-items route enum used to strip them
-    // silently. Widening the validator to z.string() lets hydration apply
-    // the view's sort intent unchanged.
-    const customSortView = {
-      ...viewRow,
-      id: 'v-custom-sort',
-      isDefault: false,
-      filters: {},
-      sort: [{ key: 'next_action_due', dir: 'asc' }],
-    };
-    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
-      const u = String(url);
-      const method = init?.method ?? 'GET';
-      if (u.includes('/statuses') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/fields') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/views') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [customSortView] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/documents') && method === 'GET') {
-        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    const { queryClient, router } = setup('/w/acme/p/web/work-items?view=v-custom-sort');
-    render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>,
-    );
-
-    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
-
-    await waitFor(() => {
-      const s = router.state.location.search as Record<string, unknown>;
-      expect(s.sort).toBe('next_action_due');
-      expect(s.dir).toBe('asc');
-    });
-  });
-
-  it('preserves user-supplied URL filter params over the view-stored value on first hydration', async () => {
-    // Stored view filters status to "In Progress". User arrives with
-    // ?view=v-triage&status=todo — that explicit URL filter must win.
-    const triageView = {
-      ...viewRow,
-      id: 'v-triage',
-      isDefault: false,
-      filters: { status: { $eq: 'In Progress' } },
-    };
-    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
-      const u = String(url);
-      const method = init?.method ?? 'GET';
-      if (u.includes('/statuses') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/fields') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/views') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [triageView] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/documents') && method === 'GET') {
-        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    const { queryClient, router } = setup('/w/acme/p/web/work-items?view=v-triage&status=todo');
-    render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>,
-    );
-
-    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
-
-    await waitFor(() => {
-      const s = router.state.location.search as Record<string, unknown>;
-      expect(s.view).toBe('v-triage');
-      // URL's explicit status=todo wins over view's stored "In Progress".
-      expect(s.status).toBe('todo');
-    });
-  });
-
-  it('hydrates URL filters from the active view when ?view= matches a non-default view', async () => {
-    const defaultView = {
-      ...viewRow,
-      id: 'v-default',
-      slug: 'all',
-      name: 'All',
-      isDefault: true,
-      filters: {},
-    };
-    const triageView = {
-      ...viewRow,
-      id: 'v-triage',
-      slug: 'triage',
-      name: 'Triage',
-      isDefault: false,
-      filters: { status: { $eq: 'In Progress' } },
-    };
-
-    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
-      const u = String(url);
-      const method = init?.method ?? 'GET';
-      if (u.includes('/statuses') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/fields') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/views') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [defaultView, triageView] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/documents') && method === 'GET') {
-        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    const { queryClient, router } = setup('/w/acme/p/web/work-items?view=v-triage');
-    render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>,
-    );
-
-    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
-
-    await waitFor(() => {
-      const s = router.state.location.search as Record<string, unknown>;
-      expect(s.view).toBe('v-triage');
-      expect(s.status).toBe('In Progress');
-    });
-  });
+  // I2 MOVED: TableView is no longer a hydration owner — ViewControls (mounted
+  // once in the project header) is the SOLE owner of filter/sort hydration. The
+  // self-hydration assertions that used to live here (a view-saved sort key not
+  // in the URL enum; URL-filter-wins-over-view; view-fills-URL on ?view=) now
+  // live un-weakened in use-view-filter-hydration.test.ts, which exercises the
+  // single hydration source directly.
 
   // B.6 MOVED: the FilterBar + its onClauseChange autosave moved to the unified
   // ViewControls (project header). The "filter change does NOT autosave without

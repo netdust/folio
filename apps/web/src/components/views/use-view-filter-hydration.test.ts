@@ -88,6 +88,54 @@ describe('useViewFilterHydration', () => {
     expect(search.view).toBe('v1');
   });
 
+  it("hydrates a view's saved sort (incl. a custom field key not in the URL enum)", () => {
+    // I2-moved from table-view.test.tsx: a saved view can sort by any column key
+    // (e.g. a custom field 'next_action_due'). The hook applies that sort intent
+    // to the URL unchanged — proving the single hydration owner carries sort, not
+    // just filters.
+    const navigate = vi.fn();
+    renderHook(() =>
+      useViewFilterHydration(
+        view({ filters: {}, sort: [{ key: 'next_action_due', dir: 'asc' }] }),
+        {},
+        navigate,
+        undefined,
+      ),
+    );
+
+    expect(navigate).toHaveBeenCalledTimes(1);
+    const search = navigate.mock.calls[0][0].search as Record<string, unknown>;
+    expect(search.sort).toBe('next_action_due');
+    expect(search.dir).toBe('asc');
+  });
+
+  it('lets an explicit URL sort win over the view-stored sort', () => {
+    // The denial/precedence path for sort: a user who deep-links ?sort=title must
+    // keep it; the view's stored sort does not clobber the explicit URL choice.
+    // A view-only filter (status) is added so the hydration navigate DOES fire —
+    // then we assert the resulting sort is the URL's, not the view's.
+    const navigate = vi.fn();
+    renderHook(() =>
+      useViewFilterHydration(
+        view({
+          filters: { status: ['todo'] },
+          sort: [{ key: 'next_action_due', dir: 'asc' }],
+        }),
+        { sort: 'title', dir: 'desc' },
+        navigate,
+        undefined,
+      ),
+    );
+
+    expect(navigate).toHaveBeenCalledTimes(1);
+    const search = navigate.mock.calls[0][0].search as Record<string, unknown>;
+    // The view's status fills the missing key (proves a real hydration ran)…
+    expect(search.status).toEqual(['todo']);
+    // …but the URL's explicit sort wins over the view's 'next_action_due'.
+    expect(search.sort).toBe('title');
+    expect(search.dir).toBe('desc');
+  });
+
   it('does NOT re-navigate when the URL already matches the view (idempotent)', () => {
     const navigate = vi.fn();
     // The URL already carries the view's stored status → no replace-navigate.

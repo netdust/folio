@@ -26,7 +26,6 @@ import { EmptyState } from '../views/empty-state.tsx';
 import { GroupHeaderRow } from '../views/group-header-row.tsx';
 import { defaultGroupedListSettings } from '../views/grouped-list-config.tsx';
 import { ListSkeleton } from '../views/list-skeleton.tsx';
-import { useViewFilterHydration } from '../views/use-view-filter-hydration.ts';
 import { ColumnMenu } from './column-menu.tsx';
 import { ColumnPicker } from './column-picker.tsx';
 import { columnSuggestions } from './column-suggestions.ts';
@@ -41,21 +40,6 @@ interface Props {
   wslug: string;
   pslug: string;
   tslug: string;
-}
-
-/**
- * One-level structural equality for URL search values. `===` is wrong here:
- * filter arrays (status/labels) are fresh references each render even when
- * their contents match, which would force `same` to false on every hydration
- * pass. Exported for direct unit tests.
- */
-export function sameSearchValue(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (Array.isArray(a) && Array.isArray(b)) {
-    if (a.length !== b.length) return false;
-    return a.every((v, i) => v === b[i]);
-  }
-  return false;
 }
 
 /** Collapse-state key + GroupHeaderRow testid suffix for the ungrouped bucket. */
@@ -204,11 +188,10 @@ export function TableView({ wslug, pslug, tslug }: Props) {
     return list.find((v) => v.isDefault) ?? list[0] ?? null;
   }, [urlViewId, viewsData]);
 
-  // Hydrate URL filters/sort from the active view ONCE per view, via the SHARED
-  // hook (also called by ViewControls so there is one hydration source). User
-  // changes to the URL after hydration always win until they explicitly save
-  // filters back to the view.
-  useViewFilterHydration(activeView, search, navigate, urlViewId);
+  // Filter/sort hydration from the active view is OWNED by ViewControls (mounted
+  // once in the project header for every view type) — TableView only READS the
+  // hydrated URL `search` (→ clauses → listParams above). It does NOT hydrate
+  // itself, so there is a SINGLE hydration owner and no double-navigate race.
 
   const allColumns: Column[] = useMemo(
     // Pass the loaded docs so mergeColumns can synthesize columns for visible

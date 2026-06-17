@@ -9,7 +9,7 @@ const FILTER_KEYS = ['status', 'priority', 'assignee', 'labels', 'updated_since'
  * filter arrays (status/labels) are fresh references each render even when their
  * contents match, which would force `same` to false on every hydration pass.
  */
-function sameSearchValue(a: unknown, b: unknown): boolean {
+export function sameSearchValue(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (Array.isArray(a) && Array.isArray(b)) {
     if (a.length !== b.length) return false;
