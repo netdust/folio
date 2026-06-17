@@ -112,6 +112,13 @@
 
 `── REVIEW GATE ── (STANDARD)` **STOP. 2 finders + simplicity + invariant-auditor (filter/settings → view, not document) + browser feature-acceptance (filter + controls on all 5 views). Stefan sign-off.**
 
+**GATE RESULT (2026-06-17):**
+- **Invariant-auditor:** CLEAN — no bypass of inv-16/18; diff strengthened convergence (timeline zoom write moved renderer→ViewControls).
+- **Generalist (5-pillar):** 1 CRITICAL **C1** — shared filter only wired into table/list; kanban/calendar/timeline ignored it (named deliverable B.3 unimplemented). **FIXED** commit `d11c6576` (RED-first per-renderer seam tests; kanban merge preserves `sort=board_position`). + I1 (suite stayed green because nothing asserted the clause reached the data hook — fixed via the new seam tests) + I2 (calendar dateField → shared `settingString`, folded in).
+- **Simplicity:** LOW complexity. One substantive cleanup DEFERRED as follow-up: extract shared `GroupByPopover` (~50-line dup ListControls↔BoardToolbar; the inline comment under-states it). NOT a blocker.
+- **Browser feature-acceptance:** PASS — list settings match board pills; filter narrows rows live on board (`priority=high` → 2 high cards across columns, sort preserved) and calendar (`status=done` → 1 scheduled + 1 unscheduled, date-field slot intact).
+- **Suite:** web 1094 / tsc clean. Commits: B.7 `dadf72ea` + C1 `d11c6576`.
+
 ---
 
 ## After this rework
