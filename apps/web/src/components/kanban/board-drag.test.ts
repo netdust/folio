@@ -97,42 +97,61 @@ describe('resolveDrop', () => {
 // moving up (drop-before) and BELOW it when moving down (drop-after). Without
 // the drop-after on a downward move, a down-by-one drop lands in the card's own
 // slot and "never moves" (only worked when moving 2+ positions).
-describe('dropSlotPosition', () => {
+// dropSlotPosition is now EDGE-AWARE: the caller passes the closest edge
+// ('top' | 'bottom') computed from the dragged-card center vs the over-card
+// midpoint (getClosestEdge), instead of the old array-index `movingDown`
+// heuristic. The OUTCOMES below are unchanged from the index-heuristic era —
+// only the input shape changed: each call now states the edge that reproduces
+// the same intended drop. The edge a real drag produces is documented per case.
+describe('dropSlotPosition (edge-aware)', () => {
   const positions: Record<string, string | null> = { x: 'a', y: 'c', z: 'e' };
   const posOf = (id: string) => positions[id] ?? null;
 
-  test('down-by-one: dragging a card onto the NEXT card lands it AFTER that card', () => {
-    // Display order x(a) y(c) z(e); drag x DOWN onto y → x must land between
-    // y(c) and z(e) (after y), NOT back above y. This is the regression: the old
-    // drop-before put x before y = its own slot = no move.
-    const pos = dropSlotPosition(['x', 'y', 'z'], posOf, 'x', 'y');
+  test('down-by-one: drag x onto the BOTTOM half of the next card y → lands AFTER y', () => {
+    // Display x(a) y(c) z(e); dragging x DOWN onto y, pointer in y's bottom half
+    // → edge 'bottom' → x lands between y(c) and z(e). The regression: must NOT
+    // land back above y (its own slot).
+    const pos = dropSlotPosition(['x', 'y', 'z'], posOf, 'x', 'y', 'bottom');
     expect('c' < pos && pos < 'e').toBe(true);
   });
 
-  test('down onto the LAST card appends after it', () => {
-    // Drag x DOWN onto z (the last card) → land after z(e).
-    const pos = dropSlotPosition(['x', 'y', 'z'], posOf, 'x', 'z');
+  test('MANDATORY: drop on the BOTTOM half of the LAST card → true append (the "lands second" bug)', () => {
+    // Drag x DOWN onto z (last card), bottom half → must append AFTER z(e), not
+    // land mid-list. This is the literal Stefan bug.
+    const pos = dropSlotPosition(['x', 'y', 'z'], posOf, 'x', 'z', 'bottom');
     expect(pos > 'e').toBe(true);
   });
 
-  test('up: dragging a card onto an earlier card lands it BEFORE that card', () => {
-    // Drag z UP onto y → land between x(a) and y(c) (above y, drop-before).
-    const pos = dropSlotPosition(['x', 'y', 'z'], posOf, 'z', 'y');
+  test('up: drag z onto the TOP half of an earlier card y → lands BEFORE y', () => {
+    // Drag z UP onto y, top half → edge 'top' → land between x(a) and y(c).
+    const pos = dropSlotPosition(['x', 'y', 'z'], posOf, 'z', 'y', 'top');
     expect('a' < pos && pos < 'c').toBe(true);
   });
 
-  test('up onto the FIRST card yields a rank before it', () => {
-    const pos = dropSlotPosition(['x', 'y', 'z'], posOf, 'z', 'x');
+  test('top half of the FIRST card yields a rank before it', () => {
+    const pos = dropSlotPosition(['x', 'y', 'z'], posOf, 'z', 'x', 'top');
     expect(pos < 'a').toBe(true);
   });
 
-  test('null overDocId appends after the last remaining card', () => {
-    const pos = dropSlotPosition(['x', 'y', 'z'], posOf, 'x', null);
+  test('cross-column drop on the BOTTOM half of a card → lands after it', () => {
+    // active 'q' is NOT in this column's ordered ids → cross-column. Bottom half
+    // of y → land between y(c) and z(e).
+    const pos = dropSlotPosition(['x', 'y', 'z'], posOf, 'q', 'y', 'bottom');
+    expect('c' < pos && pos < 'e').toBe(true);
+  });
+
+  test('cross-column drop on the TOP half of a card → lands before it', () => {
+    const pos = dropSlotPosition(['x', 'y', 'z'], posOf, 'q', 'y', 'top');
+    expect('a' < pos && pos < 'c').toBe(true);
+  });
+
+  test('null overDocId appends after the last remaining card (edge irrelevant)', () => {
+    const pos = dropSlotPosition(['x', 'y', 'z'], posOf, 'x', null, 'bottom');
     expect(pos > 'e').toBe(true);
   });
 
   test('an unranked (null board_position) neighbor is treated as an open end', () => {
-    const pos = dropSlotPosition(['x', 'y'], (id) => (id === 'x' ? null : 'm'), 'y', 'x');
+    const pos = dropSlotPosition(['x', 'y'], (id) => (id === 'x' ? null : 'm'), 'y', 'x', 'top');
     expect(typeof pos).toBe('string');
     expect(pos.length).toBeGreaterThan(0);
   });

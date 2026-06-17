@@ -1,4 +1,5 @@
 import { computeReorderPosition } from './board-reorder.ts';
+import type { CardEdge } from './closest-edge.ts';
 
 export type DropAction =
   | { kind: 'none' }
@@ -60,6 +61,7 @@ export function dropSlotPosition(
   positionOf: (id: string) => string | null,
   activeId: string,
   overDocId: string | null,
+  closestEdge: CardEdge,
 ): string {
   const idsWithoutActive = orderedDocIds.filter((id) => id !== activeId);
   const positions = idsWithoutActive.map((id) => positionOf(id) ?? null);
@@ -70,19 +72,18 @@ export function dropSlotPosition(
   const overIdx = idsWithoutActive.indexOf(overDocId);
   if (overIdx === -1) return computeReorderPosition(positions, idsWithoutActive.length);
 
-  // DIRECTION-AWARE drop slot. computeReorderPosition inserts BEFORE targetIndex.
-  // - Dragging a card UP (its original index is AFTER the over-card): "drop on
-  //   the over-card" means land ABOVE it → targetIndex = overIdx (drop-before). ✓
-  // - Dragging a card DOWN (its original index is BEFORE the over-card): "drop on
-  //   the over-card" means land BELOW it → targetIndex = overIdx + 1 (drop-AFTER).
-  // Without the +1, a down-by-one drop computes a rank before the over-card —
-  // i.e. the slot the card already occupied — so it never moves (it "only works
-  // if you move 2+ positions"). The active card's ORIGINAL index decides
-  // direction, so read it from orderedDocIds (before the active was filtered).
-  const activeOrigIdx = orderedDocIds.indexOf(activeId);
-  const overOrigIdx = orderedDocIds.indexOf(overDocId);
-  const movingDown = activeOrigIdx !== -1 && overOrigIdx !== -1 && activeOrigIdx < overOrigIdx;
-  const targetIndex = movingDown ? overIdx + 1 : overIdx;
+  // EDGE-AWARE drop slot (the "lands second" fix). computeReorderPosition inserts
+  // BEFORE targetIndex into the active-REMOVED array, so `overIdx` is already the
+  // over-card's post-removal position. The drop side comes from where the dragged
+  // card's CENTER is relative to the over-card MIDPOINT (closestEdge), not from
+  // an array-index direction guess:
+  //   - edge 'top'    → land BEFORE the over-card → targetIndex = overIdx
+  //   - edge 'bottom' → land AFTER  the over-card → targetIndex = overIdx + 1
+  // The bottom half of the LAST card yields overIdx+1 === length → a true append
+  // (the old index heuristic mis-fired here → the card "landed second"). This is
+  // uniform for same-column and cross-column because overIdx is always measured
+  // in the active-removed array.
+  const targetIndex = closestEdge === 'bottom' ? overIdx + 1 : overIdx;
   return computeReorderPosition(positions, targetIndex);
 }
 
