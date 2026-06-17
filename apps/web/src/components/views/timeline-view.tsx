@@ -355,7 +355,7 @@ export function TimelineView({ wslug, pslug, tslug, initialRange }: Props) {
               type="button"
               onClick={jumpToday}
               disabled={todayCol < 0}
-              className="rounded-md border border-border-light px-2 py-1 text-sm text-fg-2 hover:bg-card disabled:opacity-40"
+              className="rounded-sm px-2 py-1 text-xs text-fg-2 hover:bg-card disabled:opacity-40"
             >
               Today
             </button>

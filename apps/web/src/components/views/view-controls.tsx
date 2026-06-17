@@ -18,8 +18,12 @@ interface Props {
   tslug: string;
 }
 
+// Compact, borderless native select matching the board/list Popover-pill look
+// (text-xs, rounded-sm, hover:bg-card) so calendar/timeline settings read at the
+// same size/weight as the board's. Kept a native <select> (not a Popover-pill)
+// for the date-field pickers — same LOOK, less code, unchanged behavior.
 const selectClass =
-  'rounded-md border border-border-light bg-shell px-2 py-1 text-sm text-fg input-focus';
+  'rounded-sm bg-transparent px-1.5 py-1 text-xs text-fg-2 hover:bg-card input-focus';
 
 const TIMELINE_ZOOMS = ['day', 'week', 'month'] as const;
 const ZOOM_LABELS: Record<(typeof TIMELINE_ZOOMS)[number], string> = {
@@ -165,7 +169,7 @@ export function ViewControls({ wslug, pslug, tslug }: Props) {
     const options = dateFields(allFields);
     return (
       <div className="flex items-center gap-1">
-        <label htmlFor="vc-date-field" className="text-sm text-fg-3">
+        <label htmlFor="vc-date-field" className="text-xs text-fg-3">
           Date field
         </label>
         <select
@@ -193,7 +197,8 @@ export function ViewControls({ wslug, pslug, tslug }: Props) {
     const options = dateFields(allFields);
     return (
       <div className="flex flex-wrap items-center gap-3">
-        <div className="flex items-center rounded-md border border-border-light">
+        {/* Borderless compact zoom segment, matching the board/list pill scale. */}
+        <div className="flex items-center gap-0.5">
           {TIMELINE_ZOOMS.map((z) => (
             <button
               key={z}
@@ -202,8 +207,8 @@ export function ViewControls({ wslug, pslug, tslug }: Props) {
               aria-pressed={z === zoom}
               className={
                 z === zoom
-                  ? 'bg-card px-2 py-1 text-sm text-fg first:rounded-l-md last:rounded-r-md'
-                  : 'px-2 py-1 text-sm text-fg-2 hover:bg-card first:rounded-l-md last:rounded-r-md'
+                  ? 'rounded-sm bg-card px-2 py-1 text-xs text-fg'
+                  : 'rounded-sm px-2 py-1 text-xs text-fg-2 hover:bg-card'
               }
             >
               {ZOOM_LABELS[z]}
@@ -211,7 +216,7 @@ export function ViewControls({ wslug, pslug, tslug }: Props) {
           ))}
         </div>
         <div className="flex items-center gap-1">
-          <label htmlFor="vc-start-field" className="text-sm text-fg-3">
+          <label htmlFor="vc-start-field" className="text-xs text-fg-3">
             Start field
           </label>
           <select
@@ -229,7 +234,7 @@ export function ViewControls({ wslug, pslug, tslug }: Props) {
           </select>
         </div>
         <div className="flex items-center gap-1">
-          <label htmlFor="vc-end-field" className="text-sm text-fg-3">
+          <label htmlFor="vc-end-field" className="text-xs text-fg-3">
             End field
           </label>
           <select

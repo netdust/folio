@@ -267,14 +267,14 @@ export function CalendarView({ wslug, pslug, tslug, initialMonth }: Props) {
               type="button"
               aria-label="Previous month"
               onClick={goPrev}
-              className="rounded-md border border-border-light px-2 py-1 text-sm text-fg-2 hover:bg-card"
+              className="rounded-sm px-2 py-1 text-xs text-fg-2 hover:bg-card"
             >
               ‹
             </button>
             <button
               type="button"
               onClick={goToday}
-              className="rounded-md border border-border-light px-2 py-1 text-sm text-fg-2 hover:bg-card"
+              className="rounded-sm px-2 py-1 text-xs text-fg-2 hover:bg-card"
             >
               Today
             </button>
@@ -282,7 +282,7 @@ export function CalendarView({ wslug, pslug, tslug, initialMonth }: Props) {
               type="button"
               aria-label="Next month"
               onClick={goNext}
-              className="rounded-md border border-border-light px-2 py-1 text-sm text-fg-2 hover:bg-card"
+              className="rounded-sm px-2 py-1 text-xs text-fg-2 hover:bg-card"
             >
               ›
             </button>
