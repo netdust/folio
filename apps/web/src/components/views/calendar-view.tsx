@@ -253,7 +253,10 @@ export function CalendarView({ wslug, pslug, tslug, initialMonth }: Props) {
       onDragEnd={onDragEnd}
       onDragCancel={onDragCancel}
     >
-      <div className="flex h-full min-h-0 flex-col px-[22px] py-2">
+      {/* No px-[22px] py-2 here — MainFrame's children container already
+          supplies it; re-applying double-padded the view (mis-aligned with the
+          header). Match kanban/wiki-tree, which deliberately don't re-apply it. */}
+      <div className="flex h-full min-h-0 flex-col">
         {/* Month-nav header */}
         <div className="mb-3 flex items-center gap-2">
           <h2 data-testid="calendar-month-label" className="text-base font-medium text-fg">

@@ -342,7 +342,9 @@ export function TimelineView({ wslug, pslug, tslug, initialRange }: Props) {
       onDragEnd={onDragEnd}
       onDragCancel={onDragCancel}
     >
-      <div className="flex h-full min-h-0 flex-col px-[22px] py-2">
+      {/* No px-[22px] py-2 — MainFrame's children container already supplies it
+          (re-applying double-padded the view, mis-aligning with the header). */}
+      <div className="flex h-full min-h-0 flex-col">
         {/* Toolbar: Today jump. The zoom toggle + start/end field selects moved
             to the unified ViewControls in the project header (B.6); this view
             still READS settings.zoom to render the scale. */}

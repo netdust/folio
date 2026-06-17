@@ -6,7 +6,7 @@ import { Skeleton } from '../ui/skeleton.tsx';
  */
 export function CalendarSkeleton() {
   return (
-    <div className="flex h-full min-h-0 flex-col px-[22px] py-2" aria-busy>
+    <div className="flex h-full min-h-0 flex-col" aria-busy>
       <div className="mb-3 flex items-center gap-2">
         <Skeleton width={120} height={20} />
         <Skeleton width={28} height={28} rounded="md" />
