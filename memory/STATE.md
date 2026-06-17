@@ -12,12 +12,21 @@
 - **New view inherits source view's VISIBLE columns** (`92f4447b`/`b1ca2f1d`/`799f34b6`): was defaulting to 3 builtins because the main view's saved `visibleFields` is null. Fix = cross-tree module store `current-columns-store.ts` (rail↔TableView are render SIBLINGS, no lift possible) — TableView publishes `visibleColumns` keys, `resolveNewViewColumns` (RED-first) reads snapshot-preferred/raw-view-fallback, wired in `w.$wslug.tsx`.
 - **Table full-width** (`b1ca2f1d`/`b11ff685`): `w-max`→`w-max min-w-full` on the scroll wrapper. gridTemplate UNTOUCHED (Bug E intact), locked by a strengthened no-flexible-track contract test. Suite now **1117**.
 
-### Kanban DnD correctness — DONE 2026-06-18 (`717fd4bb`..`b8fd7b94`)
-"Not smooth" (3× failed) was actually DROP-CORRECTNESS, not perf (Stefan reframed: drop-at-bottom→second; can't re-drag a just-moved card; no gap to aim). Stayed on @dnd-kit, stole the LINE school (Trello/Jira; NOT move-items). Three bugs, one shared `getClosestEdge` primitive: (1) edge-aware `dropSlotPosition` — bottom-half-of-last → true append, killed the `movingDown` heuristic (net simpler); (2) card key `${id}:${col}` remounts to bust dnd-kit's identity-cached stale rect; (3) onDragOver → 2px drop-indicator line, STATE ONLY (never moves cards). Both reviewers CLEAN. Research+plan: `docs/superpowers/specs/2026-06-17-kanban-dnd-correctness-research.md`, `plans/2026-06-17-kanban-dnd-drop-indicator.md`. Suite **1126**.
+### Kanban DnD — DONE + USER-VERIFIED IN BROWSER 2026-06-18 (`717fd4bb`..`66f78a07`, suite **1137**)
+"Not smooth" (3× failed) was DROP-CORRECTNESS, not perf (Stefan reframed via specific repros + a captured console log). Stayed on @dnd-kit, LINE school (Trello/Jira; NOT move-items). Fixes, in order:
+- **Core (`717fd4bb`..`73f70f7a`):** `getClosestEdge` primitive; edge-aware `dropSlotPosition` (bottom-of-last→append, killed `movingDown`); card key `${id}:${col}` remount busts dnd-kit's identity-cached stale rect; onDragOver→drop-indicator (STATE ONLY).
+- **`90de3ebc`:** within-column reorder snapped back unless you over-traveled past the midpoint → fix: edge from real POINTER Y (`activatorEvent.clientY + delta.y`), not the dragged-card rect (which sits ~on the midpoint while siblings shift).
+- **`c99b1e92`:** same-column reorder now commits dnd-kit's OWN order (`reorderSlotPosition` = arrayMove + rank between resulting neighbors) so "gap opens = drops there" by construction (no over-travel threshold).
+- **`120dd95f`:** (a) empty-column drops easy via custom `boardCollisionDetection` (pointerWithin→closestCorners); (b) **the proven jump-back bug** — a column with a ranked + an UNRANKED(null) card computed rankBetween(null,null)="V" = a TIE with the existing rank → `computeReorderPosition` now SKIPS null neighbors to the nearest RANKED one (captured via temp console.log, removed after).
+- **`b246fd7e`:** drop-line moved OUT of the card (was `absolute` inside it → followed the sliding card) → now a flex SIBLING in `KanbanColumn` between cards.
+- **`66f78a07`:** drop settle — animate the REAL landed card (`animate-in zoom-in-95 fade-in-0` ~150ms, cleared via onAnimationEnd), NOT the overlay (overlay fade = duplicate-card flicker, `dropAnimation={null}` stays).
+- **Stefan confirmed in-browser: "it all seems to work, smooth."** Tuning knobs if revisited: settle `duration-150`/`zoom-in-95`; drop-line `-my-1` offset.
 
 ### ⏳ STILL TO DO before merge
-- **Stefan's browser-eyeball pass** (jsdom can't verify): B1 long-title truncation, B2 mixed-field vertical centering, B3 no font-grow on edit, B4 date picker fits column, B5 reduced-motion wins on popover; assignee flows; create-view-inherits-columns (main + bugs table), table fills width / h-scroll borders; + KANBAN: drop-at-bottom→last, re-drag just-moved card works 1st try, drop-line tracks edge + lands where line sat (S2: eyeball line sits IN the gap at -5px offset), empty-col highlight, Esc clears line.
-- **Deferred view items, NOT started:** calendar width/selected-date. (table full-width + kanban DnD = DONE above.)
+- **Stefan's browser-eyeball pass on the NON-kanban work** (jsdom can't verify): B1 long-title truncation, B2 mixed-field vertical centering, B3 no font-grow on edit, B4 date picker fits column, B5 reduced-motion wins on popover; assignee flows; create-view-inherits-columns (main + bugs table), table fills width / h-scroll borders. (Kanban = user-verified ✓.)
+- **Deferred view item, NOT started:** calendar width/selected-date. (table full-width + kanban DnD = DONE.)
+- Earlier-held: Cluster 6 (gallery + G3) — still HELD. Then whole-branch Stage-3 shake-out + actual merge (Stefan-gated).
+- Non-blocking dup follow-up still open: shared `GroupByPopover` (ListControls↔BoardToolbar).
 - Earlier-held: Cluster 6 (gallery + G3) — still HELD. Then whole-branch Stage-3 shake-out + actual merge (Stefan-gated).
 - Non-blocking dup follow-up still open: shared `GroupByPopover` (ListControls↔BoardToolbar).
 
