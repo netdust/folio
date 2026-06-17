@@ -452,6 +452,11 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
               onAdd={col.value === null ? undefined : () => onCreateInColumn(col.value)}
               isAddPending={create.isPending}
               docIds={col.docIds}
+              // Live drop-line for THIS column: the column renders it as a flex
+              // sibling between cards (stable; doesn't follow the sliding cards).
+              indicator={
+                dropIndicator && col.docIds.includes(dropIndicator.overId) ? dropIndicator : null
+              }
               // Always wrap in a SortableContext so a card-over-card drop reports
               // the over-CARD even in sorted mode (lets onDragEnd resolve the slot
               // for the auto-switch-to-Manual reorder). The PERSIST gate is
@@ -474,9 +479,6 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
                     doc={doc}
                     onOpen={openDoc}
                     isPending={pendingSlugs.has(doc.slug)}
-                    // The drop-line edge for THIS card (null unless the dragged
-                    // card is hovering it). Resolved here so the card stays dumb.
-                    indicatorEdge={dropIndicator?.overId === doc.id ? dropIndicator.edge : null}
                     // Always sortable (both modes) so over.id is a card on a
                     // card-over-card drop — see KanbanColumn `sortable` note.
                     sortable

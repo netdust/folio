@@ -87,46 +87,55 @@ describe('KanbanCard', () => {
     expect(screen.getByRole('button', { name: /Card A/ })).toBeTruthy();
   });
 
-  // Drop-line presence (Bug 2). jsdom has no layout, so this only proves the
-  // line ELEMENT renders for the right edge and is absent without — it does NOT
-  // verify positioning/no-reflow (that's the browser pass). It bites if someone
-  // deletes the line element or wires indicatorEdge wrong.
-  it('renders the drop-line on the top edge when indicatorEdge="top"', () => {
-    render(
+  // The drop-line is rendered by KanbanColumn as a flex SIBLING between cards
+  // (moved out of the card so it doesn't follow the sliding cards). jsdom has no
+  // layout, so these only prove the line ELEMENT is interleaved at the right slot
+  // and absent without an indicator — positioning/no-follow is the browser pass.
+  function renderColumn(indicator: { overId: string; edge: 'top' | 'bottom' } | null) {
+    return render(
       <DndContext>
-        <KanbanCard doc={sampleDoc()} onOpen={() => {}} sortable indicatorEdge="top" />
+        <KanbanColumn
+          value="todo"
+          label="Todo"
+          count={2}
+          docIds={['d1', 'd2']}
+          indicator={indicator}
+          sortable
+        >
+          <KanbanCard doc={sampleDoc({ id: 'd1', title: 'Card A' })} onOpen={() => {}} sortable />
+          <KanbanCard doc={sampleDoc({ id: 'd2', title: 'Card B' })} onOpen={() => {}} sortable />
+        </KanbanColumn>
       </DndContext>,
     );
-    const line = screen.getByTestId('drop-line');
-    expect(line.className).toContain('-top-[5px]');
+  }
+
+  it('column renders the drop-line when an indicator is set', () => {
+    renderColumn({ overId: 'd1', edge: 'bottom' });
+    expect(screen.getByTestId('drop-line')).toBeTruthy();
   });
 
-  it('renders the drop-line on the bottom edge when indicatorEdge="bottom"', () => {
-    render(
-      <DndContext>
-        <KanbanCard doc={sampleDoc()} onOpen={() => {}} sortable indicatorEdge="bottom" />
-      </DndContext>,
-    );
-    expect(screen.getByTestId('drop-line').className).toContain('-bottom-[5px]');
-  });
-
-  it('renders NO drop-line when indicatorEdge is null', () => {
-    render(
-      <DndContext>
-        <KanbanCard doc={sampleDoc()} onOpen={() => {}} sortable indicatorEdge={null} />
-      </DndContext>,
-    );
+  it('column renders NO drop-line without an indicator', () => {
+    renderColumn(null);
     expect(screen.queryByTestId('drop-line')).toBeNull();
   });
 
-  it('never renders a drop-line on the overlay clone', () => {
-    render(
-      <DndContext>
-        {/* overlay path ignores indicatorEdge by construction */}
-        <KanbanCard doc={sampleDoc()} onOpen={() => {}} overlay indicatorEdge="top" />
-      </DndContext>,
-    );
-    expect(screen.queryByTestId('drop-line')).toBeNull();
+  it('places the line AFTER the over-card on edge "bottom"', () => {
+    const { container } = renderColumn({ overId: 'd1', edge: 'bottom' });
+    // Order within the column body: Card A, line, Card B.
+    const body = container.querySelector('[data-testid="kanban-column-body"]');
+    const texts = [
+      ...(body?.querySelectorAll('[data-testid="drop-line"], .font-medium') ?? []),
+    ].map((el) => el.getAttribute('data-testid') ?? el.textContent);
+    expect(texts).toEqual(['Card A', 'drop-line', 'Card B']);
+  });
+
+  it('places the line BEFORE the over-card on edge "top"', () => {
+    const { container } = renderColumn({ overId: 'd2', edge: 'top' });
+    const body = container.querySelector('[data-testid="kanban-column-body"]');
+    const texts = [
+      ...(body?.querySelectorAll('[data-testid="drop-line"], .font-medium') ?? []),
+    ].map((el) => el.getAttribute('data-testid') ?? el.textContent);
+    expect(texts).toEqual(['Card A', 'drop-line', 'Card B']);
   });
 });
 
