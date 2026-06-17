@@ -49,6 +49,13 @@ interface Props {
   row: GroupSummaryRow;
   /** The configured aggregates (drives which stats render, in order). */
   aggregates: AggregateSpec[];
+  /**
+   * Whether to render the leading label + "N items" count. Defaults to `true`
+   * (the standalone grouped-list consumer). The grouped-TABLE section header
+   * (GroupHeaderRow) owns the label+count on its own LEFT side and passes
+   * `false` so they are not doubled.
+   */
+  showLabelAndCount?: boolean;
 }
 
 /**
@@ -57,7 +64,13 @@ interface Props {
  * comes from `row` (the group-summary endpoint), NEVER from a client count of
  * the loaded rows — that is the page-2-bug guard.
  */
-export function GroupAggregateHeader({ label, groupKey, row, aggregates }: Props) {
+export function GroupAggregateHeader({
+  label,
+  groupKey,
+  row,
+  aggregates,
+  showLabelAndCount = true,
+}: Props) {
   const distributions = aggregates.filter((a) => a.op === 'distribution');
   const scalars = aggregates.filter((a) => a.op !== 'distribution' && a.op !== 'count');
 
@@ -67,8 +80,12 @@ export function GroupAggregateHeader({ label, groupKey, row, aggregates }: Props
       className="flex flex-col gap-1.5 border-b border-border-light px-1 pb-2"
     >
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="text-sm font-medium text-fg">{label}</span>
-        <span className="text-xs text-fg-3">{row.count} items</span>
+        {showLabelAndCount ? (
+          <>
+            <span className="text-sm font-medium text-fg">{label}</span>
+            <span className="text-xs text-fg-3">{row.count} items</span>
+          </>
+        ) : null}
         {scalars.map((spec) => {
           const k = aggregateKey(spec);
           const val = row.aggregates[k];
