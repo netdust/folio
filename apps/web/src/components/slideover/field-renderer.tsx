@@ -224,7 +224,7 @@ function RelationField({
           <span
             key={tok}
             className={cn(
-              'inline-flex items-center gap-1 rounded-sm bg-card px-1.5 py-0.5 text-xs',
+              'inline-flex items-center gap-1 rounded-sm bg-card px-1.5 py-0.5 text-sm',
               resolved ? 'text-fg' : 'font-mono text-fg-3 line-through',
             )}
           >
@@ -431,7 +431,7 @@ function MultiSelect({
       {current.map((c) => (
         <span
           key={c}
-          className="inline-flex items-center gap-1 rounded-sm bg-card px-1.5 py-0.5 text-xs text-fg"
+          className="inline-flex items-center gap-1 rounded-sm bg-card px-1.5 py-0.5 text-sm text-fg"
         >
           {c}
           <button
