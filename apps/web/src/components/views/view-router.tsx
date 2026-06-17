@@ -2,6 +2,7 @@ import type { ViewType } from '@folio/shared';
 import type { ReactElement } from 'react';
 import { useActiveView } from '../../lib/api/use-active-view.ts';
 import { TableView } from '../table/table-view.tsx';
+import { CalendarView } from './calendar-view.tsx';
 import { GroupedListView } from './grouped-list-view.tsx';
 import { KanbanView } from './kanban-view.tsx';
 
@@ -24,7 +25,7 @@ const viewRendererFor: Record<ViewType, (p: RendererProps) => ReactElement> = {
   table: (p) => <TableView {...p} />, // the existing spreadsheet
   list: (p) => <GroupedListView {...p} />, // cluster 2b (grouped list)
   kanban: (p) => <KanbanView {...p} />,
-  calendar: (p) => <UnsupportedView type="calendar" {...p} />, // cluster 4
+  calendar: (p) => <CalendarView {...p} />, // cluster 4
   timeline: (p) => <UnsupportedView type="timeline" {...p} />, // cluster 5
   gallery: (p) => <UnsupportedView type="gallery" {...p} />, // cluster 6
 };

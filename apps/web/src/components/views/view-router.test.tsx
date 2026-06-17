@@ -17,6 +17,9 @@ vi.mock('./kanban-view.tsx', () => ({
 vi.mock('./grouped-list-view.tsx', () => ({
   GroupedListView: () => <div data-testid="grouped-list-view-marker" />,
 }));
+vi.mock('./calendar-view.tsx', () => ({
+  CalendarView: () => <div data-testid="calendar-view-marker" />,
+}));
 
 const mockUseActiveView = useActiveView as unknown as Mock;
 
@@ -43,6 +46,12 @@ describe('ViewRouter', () => {
     setView('kanban');
     render(<ViewRouter wslug="w" pslug="p" tslug="work-items" />);
     expect(screen.getByTestId('kanban-view-marker')).toBeInTheDocument();
+  });
+
+  it('routes type:calendar → CalendarView (cluster 4)', () => {
+    setView('calendar');
+    render(<ViewRouter wslug="w" pslug="p" tslug="work-items" />);
+    expect(screen.getByTestId('calendar-view-marker')).toBeInTheDocument();
   });
 
   it('routes type:list → GroupedListView (cluster 2b)', () => {
