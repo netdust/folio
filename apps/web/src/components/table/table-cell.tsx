@@ -15,6 +15,12 @@ interface Props {
   column: Column;
   doc: DocumentSummary;
   statuses: Status[];
+  // Workspace/project context — required because the assignee cell mounts the
+  // AssigneePicker, which needs them to load members + project-allowed agents.
+  // TableRow always has them, so they are required (a missed call site is a
+  // compile error).
+  wslug: string;
+  pslug: string;
   isPending: boolean;
   isSticky?: boolean;
   onOpen: (slug: string) => void;
@@ -32,6 +38,8 @@ export function TableCell({
   column,
   doc,
   statuses,
+  wslug,
+  pslug,
   isPending,
   isSticky = false,
   onOpen,

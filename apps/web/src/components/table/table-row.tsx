@@ -63,6 +63,8 @@ export function TableRow({
               column={c}
               doc={doc}
               statuses={statuses}
+              wslug={wslug}
+              pslug={pslug}
               isPending={isPending}
               isSticky={i === 0}
               onOpen={onOpen}
