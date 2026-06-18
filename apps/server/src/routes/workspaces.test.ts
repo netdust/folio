@@ -161,14 +161,31 @@ test('GET /api/v1/workspaces/:wslug returns workspace + role', async () => {
   expect(body.data.role).toBe('owner');
 });
 
-test('GET /api/v1/w/:wslug reports claude_code_enabled:false even when FOLIO_CLAUDE_CODE_ENABLED is true', async () => {
-  // Phase C shake-out: claude-code is hard-disabled at the runner preflight, so
-  // the workspace endpoint must NEVER advertise it as selectable — even when the
-  // env flag is on. The flag no longer enables execution; surfacing it would let
-  // the web UI offer a provider option that always fails.
+test('GET /api/v1/w/:wslug mirrors FOLIO_CLAUDE_CODE_ENABLED in claude_code_enabled (on → true)', async () => {
+  // claude-code is now operator-selectable (attended-only, gated at the runner
+  // preflight by ccGateBlocks). The workspace endpoint mirrors the install's env
+  // opt-in so the per-agent provider picker (provider-model-field.tsx) can offer
+  // the cc option when — and only when — the install opted in.
   const { env } = await import('../env.ts');
   const prev = env.FOLIO_CLAUDE_CODE_ENABLED;
   (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
+  try {
+    const { app, seed } = await makeTestApp();
+    const res = await app.request('/api/v1/w/acme', {
+      headers: { Cookie: seed.sessionCookie },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.claude_code_enabled).toBe(true);
+  } finally {
+    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prev;
+  }
+});
+
+test('GET /api/v1/w/:wslug reports claude_code_enabled:false when FOLIO_CLAUDE_CODE_ENABLED is off (the default, e.g. a shared/hosted image)', async () => {
+  const { env } = await import('../env.ts');
+  const prev = env.FOLIO_CLAUDE_CODE_ENABLED;
+  (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = false;
   try {
     const { app, seed } = await makeTestApp();
     const res = await app.request('/api/v1/w/acme', {

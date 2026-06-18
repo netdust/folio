@@ -49,7 +49,7 @@ Folio expects to sit behind a reverse proxy (nginx, Caddy, Traefik). Set `PUBLIC
 | `SMTP_USER` | *(optional)* | SMTP username. |
 | `SMTP_PASS` | *(optional)* | SMTP password. |
 | `SMTP_FROM` | `Folio <no-reply@example.com>` | From address used for outbound email. |
-| `FOLIO_CLAUDE_CODE_ENABLED` | `false` | Enable the `claude-code` runner backend (spawns the local `claude` CLI with host SSH/file access). Local/personal installs only — NEVER on a shared host with fleet credentials. Requires the `claude` binary on PATH. |
+| `FOLIO_CLAUDE_CODE_ENABLED` | `false` | Enable the `claude-code` runner backend (spawns the local `claude` CLI with host SSH/file access) so the **operator** can run on your own local Claude Code login. Only takes effect on **attended operator/cockpit runs** — triggers (unattended automation) can never use it, even with the flag on. **Single-operator local/personal installs only — NEVER set it on a per-customer or shared host:** the subprocess runs with your own seat's full host power, and using a subscription seat to serve another person's work violates Anthropic's terms. Requires the `claude` binary on PATH, authenticated as you. Leave unset on customer images. |
 
 ### Advanced tuning
 

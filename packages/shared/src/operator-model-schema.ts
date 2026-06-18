@@ -2,6 +2,16 @@ import { z } from 'zod';
 import { AI_PROVIDERS } from './ai-providers.ts';
 
 /**
+ * The provider set the OPERATOR may run on: the four keyed providers PLUS the
+ * keyless local `claude-code` backend (attended-only, env-gated at runtime —
+ * see runner.ts ccGateBlocks). This is INTENTIONALLY wider than `AI_PROVIDERS`
+ * (which stays the keyed set used for key-CRUD + key-resolution logic): cc
+ * carries no secret and gets no `ai_keys` row, so it must never enter the keyed
+ * paths — only this operator-selection contract.
+ */
+export const OPERATOR_MODEL_PROVIDERS = [...AI_PROVIDERS, 'claude-code'] as const;
+
+/**
  * The operator-model selection contract: which configured provider + model +
  * key-label the operator runs on. The SINGLE source of this shape — the server
  * route validator, the instance-settings setter, AND the tolerant reader all use
@@ -11,7 +21,7 @@ import { AI_PROVIDERS } from './ai-providers.ts';
  */
 export const operatorModelSettingSchema = z
   .object({
-    provider: z.enum(AI_PROVIDERS),
+    provider: z.enum(OPERATOR_MODEL_PROVIDERS),
     model: z.string().min(1),
     aiKeyLabel: z.string().min(1).default('default'),
   })

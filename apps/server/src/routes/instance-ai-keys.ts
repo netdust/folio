@@ -12,6 +12,7 @@ import { HTTPError, jsonOk } from '../lib/http.ts';
 import { requireInstanceAdmin } from '../lib/system-workspace.ts';
 import { validatePublicUrl } from '../lib/url-allow-list.ts';
 import { type AuthContext, getUser, requireSessionUser } from '../middleware/auth.ts';
+import type { ProviderName } from '../services/agent-runs.ts';
 import { getOperatorModelSetting, setOperatorModelSetting } from '../services/instance-settings.ts';
 
 /**
@@ -58,16 +59,25 @@ instanceAiKeysRoute.put(
   async (c) => {
     await requireInstanceAdmin(db, getUser(c).id);
     const v = c.req.valid('json');
-    // Referential check: the selection must point at a configured key (#4).
-    const keyRow = await db.query.aiKeys.findFirst({
-      where: and(eq(aiKeys.provider, v.provider), eq(aiKeys.label, v.aiKeyLabel)),
-    });
-    if (!keyRow) {
-      throw new HTTPError(
-        'INVALID_BODY',
-        `no AI key configured for ${v.provider}/${v.aiKeyLabel} — add it in Settings → AI first`,
-        422,
-      );
+    // claude-code is the KEYLESS local backend: it carries no secret and has no
+    // `ai_keys` row (its provider is intentionally absent from the ai_keys enum).
+    // The referential "key must exist" check (#4) applies only to the keyed
+    // providers; for cc, selecting it merely records the operator-model setting.
+    // Runtime enforcement (attended-only + FOLIO_CLAUDE_CODE_ENABLED) lives in
+    // the runner (ccGateBlocks), not here. The `as ProviderName` narrows the
+    // keyed enum; cc is excluded from this branch so the cast is only reached for
+    // keyed values.
+    if (v.provider !== 'claude-code') {
+      const keyRow = await db.query.aiKeys.findFirst({
+        where: and(eq(aiKeys.provider, v.provider as ProviderName), eq(aiKeys.label, v.aiKeyLabel)),
+      });
+      if (!keyRow) {
+        throw new HTTPError(
+          'INVALID_BODY',
+          `no AI key configured for ${v.provider}/${v.aiKeyLabel} — add it in Settings → AI first`,
+          422,
+        );
+      }
     }
     await setOperatorModelSetting(db, v);
     return jsonOk(c, { ok: true, operator_model: v });

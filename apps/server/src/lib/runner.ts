@@ -350,8 +350,8 @@ export async function runAgent(args: { runId: string }): Promise<void> {
       } else {
         // A conversation-backed run replays the TRUSTED conversation thread as its
         // message source; a document-thread run keeps buildInitialMessages (parent
-        // body + comments, fenced as untrusted). claude-code stays hard-disabled,
-        // so this branch is API-only.
+        // body + comments, fenced as untrusted). claude-code took the ccExecute
+        // branch above, so this branch is the keyed-API-provider path only.
         const messages = ctx.runSink.isConversation
           ? await buildConversationMessages(db, requireConversationId(ctx), ctx.agentSkills)
           : await buildInitialMessages(ctx);
@@ -863,28 +863,57 @@ async function loadAgentDefinition(
  * the original is the lineage being resumed, not a competing peer, so it must
  * not trip the idempotency violation. A genuine third peer still trips it.
  */
+/**
+ * The SINGLE decision for whether a claude-code run is allowed. cc is the
+ * keyless local subprocess backend; it is permitted ONLY on an ATTENDED operator
+ * run (a human is in the cockpit — `conversationId` set, `unattended !== true`)
+ * AND only when the install explicitly opts in via FOLIO_CLAUDE_CODE_ENABLED.
+ *
+ * Both halves are required:
+ *  - The env flag keeps cc OFF on any hosted/shared/per-customer image (it never
+ *    sets the flag) — threat model T2.
+ *  - The attended check keeps an UNATTENDED trigger run from re-entering Folio
+ *    over MCP without the C3 unattended floor — threat model T1 (gap S-1). A
+ *    trigger run has no conversationId and `unattended === true`, so it is
+ *    refused even with the flag on. S-1 stays unreachable by construction.
+ *
+ * Returns {blocked:false} for any non-cc provider (the caller proceeds normally),
+ * and a flag-distinguishing reason when cc is blocked.
+ */
+function ccGateBlocks(ctx: RunContext): { blocked: false } | { blocked: true; reason: string } {
+  if (ctx.fm.provider !== 'claude-code') return { blocked: false };
+  if (!env.FOLIO_CLAUDE_CODE_ENABLED) {
+    return {
+      blocked: true,
+      reason:
+        'The claude-code backend is OFF on this install. An instance admin must set FOLIO_CLAUDE_CODE_ENABLED=true (only on a local/personal install — never on a shared/hosted Folio).',
+    };
+  }
+  const attended = ctx.conversationId != null && ctx.unattended !== true;
+  if (!attended) {
+    return {
+      blocked: true,
+      reason:
+        'The claude-code backend is allowed only on an ATTENDED operator/cockpit run (a human in the cockpit). Unattended trigger runs cannot use claude-code.',
+    };
+  }
+  return { blocked: false };
+}
+
 async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolean> {
   const { run, fm, agent, agentFm } = ctx;
   const runId = run.id;
 
-  // 0 — claude-code backend gate. HARD-DISABLED (Phase C shake-out): ANY
-  // claude-code run is refused here, regardless of FOLIO_CLAUDE_CODE_ENABLED.
-  // WHY: the cc path spawns the `claude` CLI, which re-enters Folio via /mcp
-  // UNAWARE of run-derived authority — so the C3 unattended floor AND the
-  // agent∩caller scope ceiling are both bypassed on that path (security gaps
-  // S-1/S-2 from the Phase C shake-out). cc stays hard-disabled until the
-  // cc-path authority is threaded through the CLI re-entry. Because this gate
-  // fires before runAgent/runAgentResume branch to ccExecute (runner.ts:209/293),
-  // ccExecute is now UNREACHABLE — which makes S-1/S-2 unreachable by
-  // construction. The env flag is left parsed (env.ts) for deploy-config
-  // compatibility but NO LONGER enables execution. Cheapest check — runs before
-  // any DB work.
-  if (ctx.fm.provider === 'claude-code') {
-    await failRun(
-      ctx,
-      runErrorReasonSchema.enum.claude_code_disabled,
-      'The claude-code backend is disabled in this build (refused at preflight). Use an API provider (anthropic/openai/openrouter/ollama).',
-    );
+  // 0 — claude-code backend gate (document/trigger path). A document or
+  // trigger-fired run is NEVER attended (no conversationId), so ccGateBlocks
+  // always blocks it here — keeping the unattended-floor bypass (S-1) unreachable
+  // on this path. The ATTENDED operator path runs conversationPreflight instead,
+  // where ccGateBlocks performs the same check and may ALLOW. Cheapest check —
+  // runs before any DB work. (cc branch points: runAgent runner.ts:348,
+  // runAgentResume runner.ts:460.)
+  const ccGate = ccGateBlocks(ctx);
+  if (ccGate.blocked) {
+    await failRun(ctx, runErrorReasonSchema.enum.claude_code_disabled, ccGate.reason);
     return true;
   }
 
@@ -892,9 +921,11 @@ async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolea
   // the key into ctx.apiKey (empty string when absent — a missing key is a
   // pre-flight failure, not a load failure). Derive presence from that instead
   // of a second ai_keys query.
-  // (claude-code — the only keyless/local backend — can no longer reach here: it
-  // is hard-refused at step 0, so every provider past this point is a keyed API
-  // provider and the BYOK key requirement always applies.)
+  // (claude-code — the only keyless/local backend — never reaches here on THIS
+  // path: a document/trigger cc run is blocked at step 0 by ccGateBlocks, so
+  // every provider past this point is a keyed API provider and the BYOK key
+  // requirement always applies. An ATTENDED cc operator run runs
+  // conversationPreflight instead — never this function.)
   // A key ROW exists but its ciphertext couldn't be decrypted (wrong
   // FOLIO_MASTER_KEY) — distinct from a missing key. Honest, actionable message
   // (re-enter the key), NOT the misleading no_ai_key / sanitized "Network error".
@@ -1015,6 +1046,24 @@ async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolea
  * conversation finally (see runAgent) regardless of which path blocks.
  */
 async function conversationPreflight(ctx: RunContext): Promise<boolean> {
+  // 0 — claude-code gate (operator path). cc is allowed only attended + opt-in;
+  // ccGateBlocks decides. When it blocks, surface the reason on the thread. On a
+  // conversation run `failRun` routes to ConversationRunSink.fail, which posts ONE
+  // `text` message carrying the reason — that single message IS the user-visible
+  // failure report (a conversation run has no `agent_run` row to transition). We
+  // deliberately do NOT also `runSink.post` the reason: that would double-post the
+  // same text on the thread (the single-failure-surface invariant — code-review
+  // #4). The reason itself distinguishes "flag off" from "not an attended run".
+  const ccGate = ccGateBlocks(ctx);
+  if (ccGate.blocked) {
+    await failRun(ctx, runErrorReasonSchema.enum.claude_code_disabled, ccGate.reason);
+    return true;
+  }
+  // cc that PASSES the gate is keyless — it carries no secret and has no
+  // `ai_keys` row, so skip the key-presence checks below (which would otherwise
+  // block on keyRowMissing / requiresKey). This is the keyless exemption.
+  if (ctx.fm.provider === 'claude-code') return false;
+
   // Block when the operator's configured key ROW is missing — for EVERY provider
   // (security review #1). A dangling reference (key deleted after selection) must
   // not let ollama silently fall back to the localhost DEFAULT_BASE. Otherwise:
@@ -1809,19 +1858,20 @@ function warnIfUnmetered(runId: string, providerLabel: string, sawUsage: boolean
 // ---------------------------------------------------------------------------
 
 /**
- * UNREACHABLE as of the Phase C shake-out — preflight refuses ALL claude-code
- * runs (step 0, runner.ts), so neither runAgent nor runAgentResume ever branch
- * into this function. Kept (not deleted) for the eventual cc-path-authority
- * revival, when the CLI re-entry is taught about run-derived authority. See the
- * security gaps S-1 (C3 unattended floor bypass) and S-2 (agent∩caller scope
- * ceiling bypass) — both live ONLY on this path.
+ * REACHABLE only via the ATTENDED operator path (conversation run): ccGateBlocks
+ * allows cc when FOLIO_CLAUDE_CODE_ENABLED is true AND the run is attended
+ * (conversationId set, unattended !== true). A document/trigger run is refused at
+ * preflight step 0 (it is never attended), so S-1 (the C3 unattended-floor bypass
+ * over the CLI's /mcp re-entry) stays unreachable. S-2 (agent∩caller scope ceiling
+ * over MCP) remains an accepted residual on this attended path — bounded by the
+ * caller's own authority since a human in the cockpit is the actor.
  *
  * claude-code execution branch. CC runs its own agentic loop to completion;
  * we capture the transcript onto the run body, post the final result as a
  * kind=result comment, and transition the run. Pre-run approval
  * (requires_approval) is handled by the existing awaiting_approval gate before
- * this point. v1 passes no MCP token (mcpToken: '') — the fresh-token mint is
- * a fast-follow (Task 7b).
+ * this point. A short-lived scoped MCP token IS minted below (mirroring the run's
+ * agent token) and revoked unconditionally in the finally block.
  *
  * KNOWN GAP (deferred): no mid-run cancellation. CC runs its own loop to
  * completion; a rejection comment posted DURING a CC run is not observed (unlike
@@ -1829,22 +1879,6 @@ function warnIfUnmetered(runId: string, providerLabel: string, sawUsage: boolean
  * with the Task 7b token/lifecycle work.
  */
 async function ccExecute(ctx: RunContext): Promise<void> {
-  // Mint a short-lived scoped bearer token so CC can call back into Folio's MCP
-  // endpoint. The token mirrors the run's existing agent token (same scopes,
-  // agentId, projectIds) and is revoked unconditionally in the finally block.
-  const { token: ccToken, hash: ccHash } = newApiToken();
-  const ccTokenId = nanoid();
-  await db.insert(apiTokens).values({
-    id: ccTokenId,
-    workspaceId: ctx.token.workspaceId,
-    name: `cc-run:${ctx.run.id}`,
-    tokenHash: ccHash,
-    scopes: ctx.token.scopes,
-    agentId: ctx.token.agentId,
-    projectIds: ctx.token.projectIds,
-    createdBy: ctx.transitionActor,
-  });
-
   // Build the per-run task + document context (parent body + comment thread,
   // incl. the run's input comment) — the SAME source the API-provider path uses
   // via buildInitialMessages. Without this the CLI saw only the standing system
@@ -1887,12 +1921,48 @@ async function ccExecute(ctx: RunContext): Promise<void> {
       ? `${ctx.fm.system_prompt}\n\n---\n## Your reference skills\n\n${ccSkillsPreamble}`
       : ctx.fm.system_prompt;
 
+  // The ephemeral MCP token id, assigned at mint INSIDE the try below. Declared
+  // out here only so the finally can revoke it. Stays null until the mint runs,
+  // so the finally's delete is a no-op if a pre-mint statement ever throws.
+  let ccTokenId: string | null = null;
   try {
+    // SECURITY (review Finding 1): mint the short-lived scoped bearer token as the
+    // FIRST statement inside the try, so the finally below revokes it on EVERY
+    // post-mint throw. The token mirrors the run's existing agent token (same
+    // scopes, agentId, projectIds). Nothing above this line needs it — only
+    // runClaudeCode does. It carries a SHORT expiresAt (10 min) as defense in
+    // depth: even if the finally were somehow skipped, the bearer middleware
+    // honors a NULL-expiry token forever, so a leaked cc token must self-expire
+    // (bearer.ts only expires rows with expiresAt != null). A cc run is
+    // short-lived; 10 minutes is ample. matches token-reach.ts's expiresAt idiom.
+    const { token: ccToken, hash: ccHash } = newApiToken();
+    ccTokenId = nanoid();
+    await db.insert(apiTokens).values({
+      id: ccTokenId,
+      workspaceId: ctx.token.workspaceId,
+      name: `cc-run:${ctx.run.id}`,
+      tokenHash: ccHash,
+      scopes: ctx.token.scopes,
+      agentId: ctx.token.agentId,
+      projectIds: ctx.token.projectIds,
+      createdBy: ctx.transitionActor,
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+    });
+
+    // Empty OR the literal 'default' sentinel → omit --model (the local Claude
+    // Code picks its own model). The operator-model setting carries `model:
+    // 'default'` for cc (operatorModelSettingSchema keeps min(1), so 'default' is
+    // the non-empty sentinel that means "no explicit model"). cc-executor only
+    // adds --model when this is a non-empty string.
+    const ccModelRaw = (ctx.fm.model ?? '').trim();
+    const ccModel =
+      ccModelRaw.length > 0 && ccModelRaw.toLowerCase() !== 'default' ? ccModelRaw : undefined;
+
     const outcome = await runClaudeCode(
       {
         systemPrompt: ccSystemPrompt,
         taskContext,
-        model: ctx.fm.model && ctx.fm.model.length > 0 ? ctx.fm.model : undefined,
+        model: ccModel,
         mcpToken: ccToken,
         mcpUrl: `${env.PUBLIC_URL}/mcp`,
         // v1: Folio's own cwd (spec decision). CC's host context comes from the
@@ -1913,10 +1983,23 @@ async function ccExecute(ctx: RunContext): Promise<void> {
     }
 
     await postAgentComment(ctx, outcome.result, 'result');
-    await transitionRun(ctx.run.id, { newStatus: 'completed', actor: ctx.transitionActor });
+    // Lifecycle transition through the polymorphic sink (mirrors postResultAndComplete):
+    // conv → NO-OP (a conversation run has NO `agent_run` row — a direct
+    // transitionRun here threw AGENT_RUN_NOT_FOUND (404), which escaped to
+    // runAgent's last-resort catch and surfaced a contradictory "couldn't complete"
+    // message AFTER the result above — F1); the `active_run_id` slot, cleared by the
+    // runAgent conversation finally, is the liveness record. doc → the real
+    // transitionRun(completed) (it has an agent_run row), so a document cc run — were
+    // it ever allowed past the attended-only preflight — still completes correctly.
+    // cc has no Anthropic-style stop reason, so done_reason stays undefined (the
+    // failure branch above already routes through the sink's failRun).
+    await ctx.runSink.complete(undefined);
   } finally {
-    // Revoke the ephemeral MCP token regardless of success or failure.
-    await db.delete(apiTokens).where(eq(apiTokens.id, ccTokenId));
+    // Revoke the ephemeral MCP token regardless of success or failure. No-op if
+    // the mint never ran (ccTokenId stays null on a pre-mint throw).
+    if (ccTokenId !== null) {
+      await db.delete(apiTokens).where(eq(apiTokens.id, ccTokenId));
+    }
   }
 }
 
