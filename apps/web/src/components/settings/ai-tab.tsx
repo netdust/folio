@@ -204,6 +204,25 @@ export function AiTab({ wslug }: Props) {
     }
   }
 
+  // Claude Code is the KEYLESS local backend — it has no ai_keys row, so it
+  // can't be marked via the per-provider key rows above. Always offered (the
+  // operator-model picker shows it regardless of FOLIO_CLAUDE_CODE_ENABLED;
+  // the run fails loudly at preflight if the flag is off — that error is the
+  // affordance that teaches the operator to set the flag). 'default' model →
+  // the runner omits --model and the local Claude Code picks its own.
+  async function onUseClaudeCodeForOperator() {
+    try {
+      await setOperatorModel.mutateAsync({
+        provider: 'claude-code',
+        model: 'default',
+        aiKeyLabel: 'default',
+      });
+      toast.success('Operator now uses Claude Code (local subprocess)');
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
+  }
+
   const inputClass =
     'mt-1 block w-full rounded-md border border-border-light bg-content px-2 py-1.5 text-sm';
 
@@ -461,6 +480,40 @@ export function AiTab({ wslug }: Props) {
             );
           })}
         </ul>
+      </section>
+
+      <section>
+        <h2 className="text-sm font-medium">Claude Code (local)</h2>
+        <p className="mt-0.5 text-xs text-fg-2">
+          Run the operator through this machine's own <code>claude</code> CLI (your Claude
+          subscription, your seat). No API key needed. Requires the install to set{' '}
+          <code>FOLIO_CLAUDE_CODE_ENABLED=true</code> — safe only on a local/personal install, never
+          on a shared/hosted Folio. Attended (cockpit) runs only.
+        </p>
+        <div className="mt-2 flex items-center gap-2 rounded-md border border-border-light bg-content px-3 py-2 text-sm">
+          <span className="font-medium">Claude Code</span>
+          <span className="rounded-full bg-fg-3/15 px-1.5 py-0.5 text-[10px] font-medium text-fg-3">
+            no key needed
+          </span>
+          {operatorModel.data?.provider === 'claude-code' ? (
+            <span className="ml-1 rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
+              operator
+            </span>
+          ) : null}
+          <span className="flex-1" />
+          <Button
+            variant="secondary"
+            disabled={setOperatorModel.isPending}
+            aria-label={
+              operatorModel.data?.provider === 'claude-code'
+                ? 'Claude Code in use as operator'
+                : 'Use Claude Code for operator'
+            }
+            onClick={onUseClaudeCodeForOperator}
+          >
+            {operatorModel.data?.provider === 'claude-code' ? 'In use' : 'Use for operator'}
+          </Button>
+        </div>
       </section>
     </div>
   );

@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import {
   useDeleteInstanceAiKey,
@@ -445,6 +446,40 @@ describe('AiTab', () => {
       );
       expect(ollamaRow?.textContent).toMatch(/operator/i);
       expect(ollamaRow?.textContent).toMatch(/local/); // the non-default label is shown
+    });
+  });
+
+  describe('Claude Code (local) operator option', () => {
+    test('offers a Claude Code operator option that sets the keyless operator model', async () => {
+      const setMutate = vi.fn().mockResolvedValue({ ok: true });
+      vi.mocked(useSetOperatorModel).mockReturnValue({
+        mutateAsync: setMutate,
+        isPending: false,
+      } as never);
+      vi.mocked(useOperatorModel).mockReturnValue({ data: null, isLoading: false } as never);
+      vi.mocked(useInstanceAiKeys).mockReturnValue({ data: [], isLoading: false } as never);
+      renderTab();
+      // The cc button has a distinct aria-label to disambiguate from the per-key
+      // "Use for operator" buttons.
+      const btn = await screen.findByRole('button', { name: /use claude code for operator/i });
+      await userEvent.click(btn);
+      expect(setMutate).toHaveBeenCalledWith({
+        provider: 'claude-code',
+        model: 'default',
+        aiKeyLabel: 'default',
+      });
+    });
+
+    test('marks Claude Code as the operator when the operator-model is claude-code', async () => {
+      vi.mocked(useOperatorModel).mockReturnValue({
+        data: { provider: 'claude-code', model: 'default', aiKeyLabel: 'default' },
+        isLoading: false,
+      } as never);
+      renderTab();
+      // The cc section heading is always rendered.
+      expect(await screen.findByText(/claude code \(local\)/i)).toBeInTheDocument();
+      // When cc is the active operator, the operator badge should appear.
+      expect(screen.getByText(/^operator$/i)).toBeInTheDocument();
     });
   });
 });
