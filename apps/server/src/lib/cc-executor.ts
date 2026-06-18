@@ -6,8 +6,12 @@
  *
  * Folio-side auth: the per-run minted token is wired into CC's MCP config via
  * env (FOLIO_MCP_TOKEN), so CC's callbacks into Folio's MCP server carry the
- * agent's exact scopes. Host-side powers (SSH, wp, files) are governed by the
- * machine, outside Folio's envelope.
+ * agent's exact scopes. The spawn is granted `--allowedTools mcp__folio` so the
+ * headless `-p` subprocess may call those Folio MCP tools without interactive
+ * approval (impossible with no TTY) — scoped to the Folio MCP server ONLY, so
+ * the grant confers no host-side bash/file/web powers (S-2 host-power
+ * containment). Host-side powers (SSH, wp, files) remain governed by the
+ * machine, outside Folio's envelope and outside this grant.
  */
 
 export interface SpawnHandle {
@@ -79,6 +83,16 @@ export async function runClaudeCode(
       },
     });
     argv.push('--mcp-config', mcpConfig, '--strict-mcp-config');
+    // Headless `claude -p` runs in default permission mode, where every tool
+    // call needs interactive approval that can't happen with no TTY — so the
+    // first Folio MCP tool call would be silently denied and the operator would
+    // ask the user instead of executing. Grant the Folio MCP tools up front.
+    // Scoped to `mcp__folio` (Claude Code namespaces MCP tools as
+    // `mcp__<serverName>__<tool>`, so `mcp__folio` matches the whole folio
+    // server and NOTHING else) — NOT --dangerously-skip-permissions: the
+    // subprocess gets no host-side bash/file/web powers from this grant (S-2
+    // host-power containment). Only pushed when the folio MCP server is wired.
+    argv.push('--allowedTools', 'mcp__folio');
   }
 
   const childEnv: Record<string, string> = {

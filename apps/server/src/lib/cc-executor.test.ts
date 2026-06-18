@@ -152,4 +152,53 @@ describe('runClaudeCode', () => {
     );
     expect(argv).not.toContain('--mcp-config');
   });
+
+  test('grants scoped Folio MCP tool permission (--allowedTools mcp__folio) when MCP server is attached', async () => {
+    let argv: string[] = [];
+    const spy: SpawnFn = (a) => {
+      argv = a.argv;
+      return {
+        stdoutText: async () => 'ok',
+        stderrText: async () => '',
+        exited: Promise.resolve(0),
+        kill: () => {},
+      };
+    };
+    await runClaudeCode(
+      {
+        systemPrompt: 'x',
+        model: undefined,
+        mcpToken: 'tok_x',
+        mcpUrl: 'http://h/mcp',
+        cwd: '/tmp',
+      },
+      { spawn: spy },
+    );
+    // Headless `claude -p` denies every tool call in default permission mode,
+    // so the operator could never call a Folio MCP tool without this grant.
+    const idx = argv.indexOf('--allowedTools');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(argv[idx + 1]).toBe('mcp__folio');
+    // S-2 host-power containment: scoped to the Folio MCP server ONLY — the
+    // grant must NOT include claude's host-side tools (bash/file/web).
+    expect(argv).not.toContain('--dangerously-skip-permissions');
+  });
+
+  test('omits --allowedTools when no MCP server is attached (no Folio tools to allow)', async () => {
+    let argv: string[] = [];
+    const spy: SpawnFn = (a) => {
+      argv = a.argv;
+      return {
+        stdoutText: async () => 'ok',
+        stderrText: async () => '',
+        exited: Promise.resolve(0),
+        kill: () => {},
+      };
+    };
+    await runClaudeCode(
+      { systemPrompt: 'x', model: undefined, mcpToken: '', mcpUrl: undefined, cwd: '/tmp' },
+      { spawn: spy },
+    );
+    expect(argv).not.toContain('--allowedTools');
+  });
 });
