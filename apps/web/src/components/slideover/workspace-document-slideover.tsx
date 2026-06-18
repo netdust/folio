@@ -1,6 +1,16 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearch } from '@tanstack/react-router';
-import { Bot, Check, Code, FileText, History, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
+import {
+  Bot,
+  Check,
+  Code,
+  FileText,
+  History,
+  Lock,
+  MoreHorizontal,
+  Pencil,
+  Trash2,
+} from 'lucide-react';
 /**
  * Phase 2.5: slideover for workspace-scoped documents (agents + triggers).
  *
@@ -202,7 +212,15 @@ export function WorkspaceDocumentSlideover({ wslug }: Props) {
         // key={doc.id} forces remount when the user opens a different doc
         // without closing the slideover (e.g., create A → create B). Without
         // the key InlineEdit's `defaultEditing` only fires once.
-        doc ? <SlideoverTitleEditor key={doc.id} doc={doc} wslug={wslug} /> : null
+        doc ? (
+          <div className="flex min-w-0 items-center gap-1.5">
+            {doc.type === 'trigger' &&
+            (doc.frontmatter as { builtin?: boolean }).builtin === true ? (
+              <Icon icon={Lock} size={14} className="text-fg-3" label="Builtin trigger — locked" />
+            ) : null}
+            <SlideoverTitleEditor key={doc.id} doc={doc} wslug={wslug} />
+          </div>
+        ) : null
       }
       toolbar={
         doc ? (

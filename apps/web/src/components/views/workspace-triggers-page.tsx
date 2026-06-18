@@ -1,5 +1,5 @@
 import { useNavigate } from '@tanstack/react-router';
-import { Loader2, Plus } from 'lucide-react';
+import { Loader2, Lock, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatApiError } from '../../lib/api/index.ts';
 import {
@@ -96,7 +96,9 @@ export function WorkspaceTriggersPage({ wslug }: Props) {
               agent?: string;
               schedule?: string | null;
               on_event?: string | null;
+              builtin?: boolean;
             };
+            const builtin = fm.builtin === true;
             const agentSlug = fm.agent ?? '';
             const agent = agentBySlug.get(agentSlug);
             const trail =
@@ -122,7 +124,17 @@ export function WorkspaceTriggersPage({ wslug }: Props) {
                   className="block w-full px-3 py-2.5 text-left hover:bg-card"
                 >
                   <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-medium">{trigger.title}</div>
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      {builtin ? (
+                        <Icon
+                          icon={Lock}
+                          size={14}
+                          className="text-fg-3"
+                          label="Builtin trigger — locked"
+                        />
+                      ) : null}
+                      <span className="truncate text-sm font-medium">{trigger.title}</span>
+                    </div>
                     <div className="font-mono text-[10px] text-fg-3">{trail}</div>
                   </div>
                   <div className="mt-0.5 font-mono text-[10px] text-fg-3">
