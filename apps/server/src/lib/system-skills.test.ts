@@ -18,6 +18,19 @@ describe('system skill + reference content', () => {
     expect(OPERATOR_PROMPT.length).toBeGreaterThan(200);
     expect(OPERATOR_PROMPT).toContain(FOLIO_SKILL_SLUG);
   });
+  // Regression: a named item not found in the first workspace must trigger a
+  // cross-workspace widen, not a "doesn't exist" / near-match flip. (The
+  // operator searched only "Demo" and missed an item in another workspace —
+  // find_documents spans projects within ONE workspace, never across them.)
+  // This asserts the GUIDANCE is present; the actual widen behavior is a live
+  // operator-turn check (shake-out), not unit-testable.
+  test('the folio skill + operator prompt teach cross-workspace widening on a miss', () => {
+    expect(FOLIO_SKILL_BODY).toContain('list_workspaces');
+    // the skill states find_documents does NOT span workspaces
+    expect(FOLIO_SKILL_BODY.toLowerCase()).toContain('does not span workspaces');
+    // both surfaces carry the "not found here ≠ doesn't exist" widen rule
+    expect(OPERATOR_PROMPT.toLowerCase()).toContain('look in the others');
+  });
   test('every operator tool is a real V1_MCP_TOOLS member', () => {
     for (const t of OPERATOR_TOOLS) expect(V1_MCP_TOOLS).toContain(t);
   });

@@ -129,6 +129,8 @@ Almost every request is one of two shapes. Pick the rail up front; do NOT run a 
 
 **CRUD rail (the default — most requests).** "Delete the todos view." "Rename this project." "Add a work item." "Mark X done." One named thing, one change. This MUST be fast and cheap: **locate → act → done.** Typically ONE read to resolve the id, ONE write, optionally ONE read to confirm. Do NOT \`list_workspaces\` if you already know the workspace. Do NOT dryRun a change you've already confirmed the target of. Do NOT re-read what a list just returned. If a request names a single existing thing and one change to it, you are on this rail — three or four calls total, not ten.
 
+**Locating fast does NOT mean locating in only one place.** When the user names a specific thing ("the work item 'Write API documentation'") but does NOT name a workspace, the thing can live in ANY workspace you can see — not just the one you happened to land in. \`find_documents\` is "workspace-wide" in the sense of *all projects within ONE workspace* — it does NOT span workspaces. So if a named title turns up nothing (or only an unrelated near-match) in the workspace you checked, **that is a signal to widen, not a verdict that the thing doesn't exist.** Before you report "not found" or act on a near-match: call \`list_workspaces\` and run \`find_documents\` in each workspace until you find it. Widening is still the CRUD rail (you're locating, not running a build ritual) — it just costs one orient call plus a \`find_documents\` per workspace on the *miss* path. On the *hit* path (you found it first try) you stay as fast as ever. Only fall back to asking the user which workspace if the title is genuinely ambiguous across several, or matches nothing anywhere.
+
 **Build rail (the exception — "set up / design").** "Set up a project for marketing." "Design a CRM table with these fields and statuses." Multi-entity creation where one wrong shape cascades. HERE you orient broadly, dryRun the risky writes, and verify as you go. The careful, call-heavy posture belongs to THIS rail only.
 
 When unsure which rail you're on: if the request names a single existing entity and one change, it's CRUD — go fast. Reserve the slow path for genuine build/design work.
@@ -207,7 +209,7 @@ create_document  { workspace_slug, project_slug, table_slug:"bugs", type:"work_i
 ## 5. Worked recipes
 
 **Spend the fewest calls.** The cheap path is *locate → act → verify*, not *list-everything → guess*. Three habits keep a task tight:
-- **Resolve names with a targeted lookup, not a full dump.** To find a document by title use \`find_documents\` (substring match, workspace-wide). To find a project, you already know its workspace → \`list_projects(workspace_slug)\`. Reach for \`list_workspaces\` (which returns EVERY workspace, including throwaway test fixtures — a large, low-signal payload) only when you genuinely don't know the workspace.
+- **Resolve names with a targeted lookup, not a full dump.** To find a document by title use \`find_documents\` (substring match across all projects within ONE workspace — it does NOT span workspaces). To find a project, you already know its workspace → \`list_projects(workspace_slug)\`. Reach for \`list_workspaces\` (which returns EVERY workspace, including throwaway test fixtures — a large, low-signal payload) only when you genuinely don't know the workspace — **or when a named thing wasn't found in the workspace you checked and could be in another** (then enumerate and \`find_documents\` per workspace; see §1a). "Not here" in one workspace ≠ "doesn't exist."
 - **dryRun only when you're unsure.** A preview is a second round-trip. For a delete where you've already confirmed the target id/name in a prior read, just delete — the read already told you what you'd remove. Use dryRun when the write is shaped from guesswork.
 - **Don't re-read what you just listed.** If \`list_views\` already returned the id and name, delete by that id and verify with ONE follow-up list — don't re-fetch the item in between.
 
@@ -221,8 +223,14 @@ folio_api_get  /api/v1/w/<wslug>/p/<pslug>/views      # find the view's id + nam
 # then act on the ITEM path with that id:
 folio_api  DELETE /api/v1/w/<wslug>/p/<pslug>/views/<id>
 
-# A document by title — skip paging list_documents entirely:
+# A document by title when you KNOW the workspace — skip paging list_documents:
 find_documents  { workspace_slug, query: "Priority", project_slug }   # → slug
+
+# A document by title when NO workspace was named — sweep, don't assume one:
+list_workspaces                                       # → every workspace you can see
+find_documents  { workspace_slug: <ws-1>, query: "Write API documentation" }
+find_documents  { workspace_slug: <ws-2>, query: "Write API documentation" }   # …until found
+# "not found in ws-1" is NOT "doesn't exist" — try the others before reporting/acting.
 \`\`\`
 
 Note: "group by priority" on a view (\`groupBy\`) is NOT the same thing as a saved view *named* "priority" — read the view list and match on what the user meant before deleting.
@@ -334,7 +342,7 @@ At the start of every run, ground yourself before acting. Your \`${FOLIO_SKILL_S
 Pick your rail first (skill §1a): most requests are CRUD — one named thing, one change — and MUST go fast and cheap (locate → act → done, ~3 calls). The careful orient-everything posture is for build/design tasks ONLY. Do not run a build ritual for a CRUD task.
 
 Use the tools as primitives:
-- ORIENT ONLY AS NEEDED. If you already have the workspace (it's in the request or the conversation), DON'T call \`list_workspaces\` — go straight to resolving the target. You need orientation only when you genuinely don't know the workspace: then call \`list_workspaces\` (no arguments), and \`list_projects\` with the chosen slug. Don't guess a slug and don't immediately ask the user; only ask if \`list_workspaces\` returns more than one and the request is ambiguous. \`list_workspaces\` returns EVERY workspace (including throwaway test fixtures) — it's a large, low-signal payload, so reach for it only when you must.
+- ORIENT ONLY AS NEEDED. If you already have the workspace (it's in the request or the conversation), DON'T call \`list_workspaces\` — go straight to resolving the target. You need orientation only when you genuinely don't know the workspace: then call \`list_workspaces\` (no arguments), and \`list_projects\` with the chosen slug. Don't guess a slug and don't immediately ask the user; only ask if \`list_workspaces\` returns more than one and the request is ambiguous. \`list_workspaces\` returns EVERY workspace (including throwaway test fixtures) — it's a large, low-signal payload, so reach for it only when you must. **One case where you MUST: a named thing you can't find.** If the user named a specific item but no workspace, and \`find_documents\`/\`list_documents\` in the workspace you picked turns up nothing (or only an unrelated near-match), do NOT conclude it doesn't exist and do NOT flip a near-match — \`list_workspaces\` and search each one (\`find_documents\` per workspace) before reporting "not found" or acting. \`find_documents\` only spans projects within a SINGLE workspace, so a miss there means "look in the others," not "gone." (See the skill §1a CRUD rail.)
 - To FIND a named resource, prefer the targeted list tools — \`list_views\`, \`list_statuses\`, \`list_fields\` (pass workspace + project slug). They take slugs, not a hand-built path, so they can't 404 on a path-shape mistake. Reach for \`folio_api_get\` with a raw \`/api/v1/w/<ws>/p/<ps>/...\` path only for reads the list tools don't cover. \`folio_api_get\` is GET-forced and maps to documents:read.
 - Use \`folio_api\` for config writes (tables, fields, views, statuses, projects) — it is gated and maps to config:write. Preview risky changes with \`dryRun\` first.
 - Prefer the narrow document/view tools (\`list_documents\`, \`get_document\`, \`create_document\`, \`update_document\`, \`list_projects\`, \`run_view\`) when they fit; reach for \`folio_api\` only for structure/config the narrow tools don't cover.
