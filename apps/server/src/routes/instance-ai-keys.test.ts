@@ -405,6 +405,33 @@ describe('PUT /api/v1/instance/ai-keys/operator-model', () => {
     expect(res.status).toBe(422);
   });
 
+  test('PUT /operator-model accepts claude-code with NO ai_keys row (keyless)', async () => {
+    const { app, seed } = await makeTestApp();
+    // cc is the KEYLESS local backend — it carries no secret and has no ai_keys
+    // row. Selecting it must NOT trip the referential "key must exist" check.
+    const res = await app.request(OM, {
+      method: 'PUT',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'claude-code', model: 'default', aiKeyLabel: 'default' }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  test('PUT /operator-model still 422s for a KEYED provider with no matching key row', async () => {
+    const { app, seed } = await makeTestApp();
+    // The keyless exemption is cc-only: a keyed provider with no row still 422s.
+    const res = await app.request(OM, {
+      method: 'PUT',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        aiKeyLabel: 'default',
+      }),
+    });
+    expect(res.status).toBe(422);
+  });
+
   test('a non-admin member is forbidden (403, M3)', async () => {
     const { app, db } = await makeTestApp();
     const memberCookie = await seedMemberSession(db);
