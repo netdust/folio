@@ -1,10 +1,11 @@
+import type { AggregateSpec, GroupedListSettings } from '@folio/shared';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { Inbox } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
   type DocumentPatch,
-  type FilterClauseUrl,
+  type DocumentSummary,
   applyFrontmatterClauses,
   clausesToListParams,
   parseFilters,
@@ -15,19 +16,22 @@ import {
 } from '../../lib/api/documents.ts';
 import { useCreateField, useDeleteField, useFields, useUpdateField } from '../../lib/api/fields.ts';
 import type { FieldType } from '../../lib/api/fields.ts';
+import { useGroupSummary } from '../../lib/api/group-summary.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
 import { useTables } from '../../lib/api/tables.ts';
 import { useUpdateView, useViews } from '../../lib/api/views.ts';
-import { FilterBar } from '../filter/filter-bar.tsx';
 import { Icon } from '../ui/icon.tsx';
 import { EmptyState } from '../views/empty-state.tsx';
+import { GroupHeaderRow } from '../views/group-header-row.tsx';
+import { defaultGroupedListSettings } from '../views/grouped-list-config.tsx';
 import { ListSkeleton } from '../views/list-skeleton.tsx';
 import { ColumnMenu } from './column-menu.tsx';
 import { ColumnPicker } from './column-picker.tsx';
 import { columnSuggestions } from './column-suggestions.ts';
 import { ColumnTypeChange } from './column-type-change.tsx';
 import { type Column, applyColumnOrder, effectiveVisibleKeys, mergeColumns } from './columns.ts';
+import { setColumnSnapshot } from './current-columns-store.ts';
 import { type AddColumnPayload, TableAddColumn } from './table-add-column.tsx';
 import { TableAddRow } from './table-add-row.tsx';
 import { type SortState, TableHeader } from './table-header.tsx';
@@ -39,19 +43,46 @@ interface Props {
   tslug: string;
 }
 
+/** Collapse-state key + GroupHeaderRow testid suffix for the ungrouped bucket. */
+const NO_GROUP_KEY = '__nogroup__';
+
+/** Read the active view's `settings` as GroupedListSettings, with safe defaults. */
+function resolveGroupSettings(settings: Record<string, unknown> | undefined): GroupedListSettings {
+  const defaults = defaultGroupedListSettings();
+  if (!settings || typeof settings !== 'object') return defaults;
+  const s = settings as Partial<GroupedListSettings>;
+  return {
+    groupBy: typeof s.groupBy === 'string' && s.groupBy ? s.groupBy : defaults.groupBy,
+    aggregates:
+      Array.isArray(s.aggregates) && s.aggregates.length > 0 ? s.aggregates : defaults.aggregates,
+    rowLayout:
+      s.rowLayout && typeof s.rowLayout === 'object' && typeof s.rowLayout.primary === 'string'
+        ? {
+            primary: s.rowLayout.primary,
+            subtitle: s.rowLayout.subtitle,
+            fields: s.rowLayout.fields ?? [],
+          }
+        : defaults.rowLayout,
+  };
+}
+
 /**
- * One-level structural equality for URL search values. `===` is wrong here:
- * filter arrays (status/labels) are fresh references each render even when
- * their contents match, which would force `same` to false on every hydration
- * pass. Exported for direct unit tests.
+ * The group value a loaded row falls under — DISPLAY placement only. `status`
+ * reads the column; any other key reads frontmatter. Empty/missing → `null`
+ * (the ungrouped bucket).
+ *
+ * Exported for direct unit tests.
  */
-export function sameSearchValue(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (Array.isArray(a) && Array.isArray(b)) {
-    if (a.length !== b.length) return false;
-    return a.every((v, i) => v === b[i]);
-  }
-  return false;
+export function bucketValue(doc: DocumentSummary, groupBy: string): string | null {
+  const raw =
+    groupBy === 'status' ? doc.status : (doc.frontmatter as Record<string, unknown>)[groupBy];
+  if (raw === null || raw === undefined || raw === '') return null;
+  // S1: a BOOLEAN groupBy field is read server-side via json_extract, which
+  // yields 1/0 — so the summary group VALUE is "1"/"0". The client holds the JS
+  // boolean here; `String(true)` = "true" would MISMATCH "1" and orphan the row
+  // (it would land in no section). Normalize to the server's representation.
+  if (typeof raw === 'boolean') return raw ? '1' : '0';
+  return String(raw);
 }
 
 export function TableView({ wslug, pslug, tslug }: Props) {
@@ -158,79 +189,10 @@ export function TableView({ wslug, pslug, tslug }: Props) {
     return list.find((v) => v.isDefault) ?? list[0] ?? null;
   }, [urlViewId, viewsData]);
 
-  // Hydrate URL filters/sort from the active view ONCE per view. The ref guard
-  // prevents the effect from re-firing when `search` updates as a result of
-  // hydration. User changes to the URL after hydration always win until they
-  // explicitly save filters back to the view (Task 8).
-  const hydratedViewId = useRef<string | null>(null);
-  useEffect(() => {
-    if (!activeView) return;
-    if (hydratedViewId.current === activeView.id) return;
-    hydratedViewId.current = activeView.id;
-
-    const viewFilters = (activeView.filters ?? {}) as Record<string, unknown>;
-    const nextSearch: Record<string, unknown> = {};
-    const FILTER_KEYS = ['status', 'priority', 'assignee', 'labels', 'updated_since'] as const;
-
-    if (search.doc) nextSearch.doc = search.doc;
-    if (urlViewId) nextSearch.view = urlViewId;
-
-    // URL filter params win — a user who deep-links with ?view=v1&status=todo
-    // explicitly chose that override; the view's stored value only fills
-    // missing keys.
-    for (const key of FILTER_KEYS) {
-      const urlValue = search[key];
-      if (urlValue !== undefined && urlValue !== null && urlValue !== '') {
-        nextSearch[key] = urlValue;
-      }
-    }
-
-    // The compiler accepts both flat (`{status: 'In Progress'}`) and AST
-    // (`{status: {$eq: 'In Progress'}}`); honor both at read time.
-    for (const key of FILTER_KEYS) {
-      if (key in nextSearch) continue; // URL already supplied this key.
-      const raw = viewFilters[key];
-      if (raw === undefined || raw === null || raw === '') continue;
-      if (typeof raw === 'string' || typeof raw === 'number' || Array.isArray(raw)) {
-        nextSearch[key] = raw;
-        continue;
-      }
-      if (typeof raw === 'object') {
-        const op = raw as Record<string, unknown>;
-        if ('$eq' in op && op.$eq !== undefined) nextSearch[key] = op.$eq;
-        else if ('$in' in op && Array.isArray(op.$in)) nextSearch[key] = op.$in as unknown[];
-      }
-    }
-
-    // Sort: URL wins for the same reason.
-    const urlSort = search.sort;
-    if (typeof urlSort === 'string' && urlSort) {
-      nextSearch.sort = urlSort;
-      const urlDir = search.dir;
-      nextSearch.dir = urlDir === 'desc' ? 'desc' : 'asc';
-    } else {
-      const viewSort = activeView.sort;
-      if (Array.isArray(viewSort) && viewSort.length > 0) {
-        const first = viewSort[0];
-        if (first && typeof first === 'object' && 'key' in first) {
-          const k = (first as { key: unknown }).key;
-          if (typeof k === 'string') {
-            nextSearch.sort = k;
-            const d = (first as { dir?: unknown }).dir;
-            nextSearch.dir = d === 'desc' ? 'desc' : 'asc';
-          }
-        }
-      }
-    }
-
-    const searchObj = search as Record<string, unknown>;
-    const same =
-      Object.keys(searchObj).length === Object.keys(nextSearch).length &&
-      Object.keys(nextSearch).every((k) => sameSearchValue(nextSearch[k], searchObj[k]));
-    if (same) return;
-
-    void navigate({ to: '.', search: nextSearch, replace: true });
-  }, [activeView, urlViewId, navigate, search]);
+  // Filter/sort hydration from the active view is OWNED by ViewControls (mounted
+  // once in the project header for every view type) — TableView only READS the
+  // hydrated URL `search` (→ clauses → listParams above). It does NOT hydrate
+  // itself, so there is a SINGLE hydration owner and no double-navigate race.
 
   const allColumns: Column[] = useMemo(
     // Pass the loaded docs so mergeColumns can synthesize columns for visible
@@ -252,6 +214,16 @@ export function TableView({ wslug, pslug, tslug }: Props) {
     [orderedColumns, visibleKeys],
   );
 
+  // Publish the columns the user is CURRENTLY looking at to the cross-tree
+  // snapshot store, so the New-view sheet (in the rail, a render sibling) can
+  // seed a created view as a copy of this on-screen set + order. visibleColumns
+  // already encodes exactly what's rendered, so no re-resolution here; keyed by
+  // tslug so a view created from another table's rail row reads that table's set.
+  useEffect(() => {
+    const keys = visibleColumns.map((c) => c.key);
+    setColumnSnapshot(wslug, pslug, tslug, { visibleFields: keys, columnOrder: keys });
+  }, [wslug, pslug, tslug, visibleColumns]);
+
   const openDoc = (slug: string) => {
     void navigate({ to: '.', search: { ...search, doc: slug }, replace: false });
   };
@@ -262,45 +234,6 @@ export function TableView({ wslug, pslug, tslug }: Props) {
       void navigate({ to: '.', search: { ...search, doc: created.slug }, replace: false });
     } catch (err) {
       toast.error(formatApiError(err));
-    }
-  };
-
-  const onClauseChange = (next: FilterClauseUrl[]) => {
-    const nextSearch: Record<string, unknown> = { ...search };
-    const flatFilters: Record<string, unknown> = {};
-    for (const k of ['status', 'priority', 'labels', 'assignee', 'updated_since']) {
-      delete nextSearch[k];
-    }
-    for (const c of next) {
-      if (c.kind === 'status') {
-        nextSearch.status = c.values;
-        flatFilters.status = c.values;
-      }
-      if (c.kind === 'priority') {
-        nextSearch.priority = c.value;
-        flatFilters.priority = c.value;
-      }
-      if (c.kind === 'labels') {
-        nextSearch.labels = c.values;
-        flatFilters.labels = c.values;
-      }
-      if (c.kind === 'assignee') {
-        nextSearch.assignee = c.value;
-        flatFilters.assignee = c.value;
-      }
-      if (c.kind === 'updated_since') {
-        nextSearch.updated_since = c.value;
-        flatFilters.updated_since = c.value;
-      }
-    }
-    void navigate({ to: '.', search: nextSearch, replace: false });
-    // Only autosave when the user has explicitly opened this view (?view=<id>).
-    // Without ?view=, activeView is a fallback — filter changes are ad-hoc.
-    if (urlViewId && activeView && activeView.id === urlViewId) {
-      updateView.mutate(
-        { id: activeView.id, patch: { filters: flatFilters } },
-        { onError: (err) => toast.error(formatApiError(err)) },
-      );
     }
   };
 
@@ -403,6 +336,76 @@ export function TableView({ wslug, pslug, tslug }: Props) {
     [pageData, clauses],
   );
 
+  // A.2: grouping is ON when the active view is a `list` type — the same
+  // spreadsheet table, rendered as group sections. A `table` view is flat.
+  const grouping = activeView?.type === 'list';
+  const groupSettings: GroupedListSettings = useMemo(
+    () => resolveGroupSettings(activeView?.settings),
+    [activeView],
+  );
+  const groupBy = grouping ? groupSettings.groupBy : null;
+  const aggregates: AggregateSpec[] = grouping ? groupSettings.aggregates : [];
+
+  // Headers (full-set counts + aggregates) come from the group-summary endpoint,
+  // fed the SAME server filter as the rows so headers and rows stay consistent.
+  // `useGroupSummary` self-gates `enabled` on groupBy + a non-empty aggregates
+  // list, so a `table` view never issues the request.
+  const groupSummary = useGroupSummary(
+    wslug,
+    pslug,
+    tslug,
+    { groupBy: groupBy ?? '', aggregates, filter: listParams.filter, type: 'work_item' },
+    { enabled: grouping },
+  );
+
+  // Collapse state — a local Set of group keys (the endpoint value, or
+  // `NO_GROUP_KEY` for the ungrouped bucket).
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const toggleGroup = useCallback((key: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  // Grouping only actually renders sections when the endpoint returned groups (or
+  // an ungrouped bucket). While the summary is loading/empty/errored we fall back
+  // to the flat list so the table is never blank.
+  const summaryGroups = groupSummary.data?.groups ?? [];
+  const summaryUngrouped = groupSummary.data?.ungrouped ?? null;
+  const renderGrouped = grouping && (summaryGroups.length > 0 || summaryUngrouped !== null);
+
+  // FIX I1: when the group-summary read FAILS on a list view, surface an error
+  // affordance — do NOT silently degrade to a flat, ungrouped view with no
+  // signal. The rows still load (the flat fallback below renders them).
+  const groupSummaryError = grouping && groupSummary.isError;
+
+  // Bucket the LOADED rows by their groupBy value — DISPLAY placement only; the
+  // header count never comes from these (the page-2 guard).
+  //
+  // FIX I2 (orphan fold): when the endpoint truncates the group set (>MAX_GROUPS
+  // distinct values → truncated:true), a loaded row whose group was capped away
+  // has NO matching header, so its own map entry would never be iterated and the
+  // row would silently vanish. Fold any such orphan into the ungrouped (`null`)
+  // bucket so it always renders SOMEWHERE rather than disappearing.
+  const rowsByGroup = useMemo(() => {
+    const map = new Map<string | null, DocumentSummary[]>();
+    if (!groupBy) return map;
+    const known = new Set(summaryGroups.map((g) => g.value));
+    for (const doc of filteredDocs) {
+      const raw = bucketValue(doc, groupBy);
+      // A non-null value with no matching summary header is an orphan (its group
+      // was truncated away) → fold into the ungrouped bucket so it never drops.
+      const key = raw !== null && !known.has(raw) ? null : raw;
+      const existing = map.get(key);
+      if (existing) existing.push(doc);
+      else map.set(key, [doc]);
+    }
+    return map;
+  }, [filteredDocs, groupBy, summaryGroups]);
+
   const docs = pageData;
 
   // slug→{slug,title} resolver covering the project's pages + THIS table's
@@ -487,14 +490,10 @@ export function TableView({ wslug, pslug, tslug }: Props) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-shrink-0 items-center justify-between gap-2">
-        <FilterBar
-          clauses={clauses}
-          statuses={statuses ?? []}
-          pinnedFields={fields ?? []}
-          onChange={onClauseChange}
-        />
-      </div>
+      {/* B.6: the FilterBar + the grouped-list settings (group-by + aggregates)
+          moved to the unified ViewControls in the project header (mounted once
+          for every view). TableView still READS the hydrated URL filter for its
+          listParams — it just no longer OWNS the filter/settings UI. */}
       <div
         data-testid="table-scroll"
         className="folio-scroll -mx-[22px] flex-1 min-h-0 overflow-auto"
@@ -510,7 +509,12 @@ export function TableView({ wslug, pslug, tslug }: Props) {
             row's bottom border stopped where the viewport ended, leaving
             the rightmost columns visually unbordered when you horizontally
             scrolled. Bug E (2026-05-26). */}
-        <div className="w-max pr-[22px]">
+        {/* `min-w-full` raises the floor to the scroll container's width when
+            content is NARROWER than the viewport, so the table fills the dead
+            right space — without touching gridTemplate, so the fixed-px tracks +
+            flush borders are unchanged (Bug E intact). min-width only raises; the
+            wider `w-max` wins on horizontal overflow, so the two never conflict. */}
+        <div className="w-max min-w-full pr-[22px]">
           <TableHeader
             columns={visibleColumns}
             sort={sort}
@@ -556,21 +560,93 @@ export function TableView({ wslug, pslug, tslug }: Props) {
               }
             />
           ) : null}
+          {/* FIX I1: group-summary failure affordance. The rows still render
+              (flat fallback below) so the table is never blank — this banner is
+              the SIGNAL that grouping/aggregates failed. */}
+          {groupSummaryError ? (
+            <div data-testid="group-summary-error" className="px-4 py-2 text-sm text-danger">
+              Kon de groepssamenvatting niet laden.
+            </div>
+          ) : null}
           <div role="list" className="flex flex-col">
-            {filteredDocs.map((doc) => (
-              <TableRow
-                key={doc.id}
-                doc={doc}
-                columns={visibleColumns}
-                statuses={statuses ?? []}
-                wslug={wslug}
-                pslug={pslug}
-                isPending={pendingSlugs.has(doc.slug)}
-                onOpen={openDoc}
-                onUpdate={onUpdate}
-                resolveRelation={relationResolve}
-              />
-            ))}
+            {renderGrouped
+              ? (() => {
+                  const renderRow = (doc: DocumentSummary) => (
+                    <TableRow
+                      key={doc.id}
+                      doc={doc}
+                      columns={visibleColumns}
+                      statuses={statuses ?? []}
+                      wslug={wslug}
+                      pslug={pslug}
+                      isPending={pendingSlugs.has(doc.slug)}
+                      onOpen={openDoc}
+                      onUpdate={onUpdate}
+                      resolveRelation={relationResolve}
+                    />
+                  );
+                  return (
+                    <>
+                      {summaryGroups.map((g) => {
+                        const key = g.value ?? NO_GROUP_KEY;
+                        const collapsed = collapsedGroups.has(key);
+                        const rows = rowsByGroup.get(g.value) ?? [];
+                        return (
+                          <div key={key} className="flex flex-col">
+                            <GroupHeaderRow
+                              row={g}
+                              aggregates={aggregates}
+                              groupBy={groupBy ?? ''}
+                              label={g.value ?? '(none)'}
+                              collapsed={collapsed}
+                              onToggle={() => toggleGroup(key)}
+                            />
+                            {!collapsed ? rows.map(renderRow) : null}
+                          </div>
+                        );
+                      })}
+                      {/* The ungrouped bucket renders LAST. */}
+                      {summaryUngrouped ? (
+                        <div key={NO_GROUP_KEY} className="flex flex-col">
+                          <GroupHeaderRow
+                            row={summaryUngrouped}
+                            aggregates={aggregates}
+                            groupBy={groupBy ?? ''}
+                            label="(none)"
+                            collapsed={collapsedGroups.has(NO_GROUP_KEY)}
+                            onToggle={() => toggleGroup(NO_GROUP_KEY)}
+                          />
+                          {!collapsedGroups.has(NO_GROUP_KEY)
+                            ? (rowsByGroup.get(null) ?? []).map(renderRow)
+                            : null}
+                        </div>
+                      ) : null}
+                      {/* FIX I2: the endpoint capped the distinct group set
+                          (truncated:true) — signal that more groups exist so the
+                          user knows the sections aren't the complete picture. */}
+                      {groupSummary.data?.truncated ? (
+                        <div data-testid="groups-truncated" className="px-4 py-2 text-xs text-fg-3">
+                          Showing the first groups — more groups exist (refine the grouping to see
+                          all).
+                        </div>
+                      ) : null}
+                    </>
+                  );
+                })()
+              : filteredDocs.map((doc) => (
+                  <TableRow
+                    key={doc.id}
+                    doc={doc}
+                    columns={visibleColumns}
+                    statuses={statuses ?? []}
+                    wslug={wslug}
+                    pslug={pslug}
+                    isPending={pendingSlugs.has(doc.slug)}
+                    onOpen={openDoc}
+                    onUpdate={onUpdate}
+                    resolveRelation={relationResolve}
+                  />
+                ))}
             {!isLoading && !error && filteredDocs.length > 0 ? (
               <TableAddRow
                 columns={visibleColumns}

@@ -7,7 +7,7 @@
 export const SYSTEM_WORKSPACE_SLUG = '__system';
 
 export type DocumentType = 'work_item' | 'page';
-export type ViewType = 'list' | 'kanban';
+export type ViewType = 'table' | 'list' | 'kanban' | 'calendar' | 'timeline' | 'gallery';
 // The closed AI-provider set lives in a leaf module (no cycle with the schema
 // that consumes it); re-exported here so `@folio/shared` stays the one import.
 export { AI_PROVIDERS, type AiProvider } from './ai-providers.ts';
@@ -25,7 +25,8 @@ export type FieldType =
   | 'url'
   | 'document_ref'
   | 'currency'
-  | 'relation';
+  | 'relation'
+  | 'image';
 
 export interface DocumentSummary {
   id: string;
@@ -55,6 +56,15 @@ export {
   type FilterInput,
   type Operator,
 } from './filter-compile.ts';
+export {
+  AGGREGATIONS,
+  type Aggregation,
+  type AggregateSpec,
+  type DistributionBucket,
+  type GroupSummaryRow,
+  type GroupSummaryResponse,
+  type GroupedListSettings,
+} from './group-summary.ts';
 export { nextFires, validateCronShape, type CronShapeResult } from './cron.ts';
 export { type EventKind, KNOWN_EVENT_KINDS } from './events.ts';
 export {

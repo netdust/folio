@@ -35,6 +35,20 @@ test('email without context falls through to string', () => {
   expect(inferFieldType('x@y.com')).toBe('string');
 });
 
+test('image inferred from an image-extension http(s) URL', () => {
+  expect(inferFieldType('https://x/p.png')).toBe('image');
+  expect(inferFieldType('http://x/photo.JPG')).toBe('image'); // case-insensitive
+  expect(inferFieldType('https://cdn.x/a/b/c.webp')).toBe('image');
+  expect(inferFieldType('https://x/icon.svg?v=2')).toBe('image'); // query string after ext
+});
+
+test('non-image URL stays url (the image rule does not over-match)', () => {
+  expect(inferFieldType('https://example.com')).toBe('url'); // no extension
+  expect(inferFieldType('https://x/page')).toBe('url');
+  expect(inferFieldType('https://x/report.pdf')).toBe('url'); // non-image extension
+  expect(inferFieldType('mailto:x@y.com')).toBe('url');
+});
+
 test('url http/https/mailto', () => {
   expect(inferFieldType('https://example.com')).toBe('url');
   expect(inferFieldType('mailto:x@y.com')).toBe('url');

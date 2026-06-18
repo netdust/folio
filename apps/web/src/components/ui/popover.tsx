@@ -29,8 +29,10 @@ export function PopoverContent({
         sideOffset={sideOffset}
         className={cn(
           'z-50 rounded-lg bg-content shadow-popover p-1.5',
+          'origin-[var(--radix-popover-content-transform-origin)] duration-150 ease-out',
           'data-[state=open]:animate-in data-[state=closed]:animate-out',
           'data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0',
+          'data-[state=open]:zoom-in-95 data-[state=closed]:zoom-out-95',
           className,
         )}
       >

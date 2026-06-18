@@ -267,6 +267,27 @@
       "when": 1780993000000,
       "tag": "0036_users_email_nocase",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1780994000000,
+      "tag": "0037_views_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "6",
+      "when": 1780995000000,
+      "tag": "0038_backfill_list_to_table",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "6",
+      "when": 1780996000000,
+      "tag": "0039_image_field_type",
+      "breakpoints": true
     }
   ]
 }

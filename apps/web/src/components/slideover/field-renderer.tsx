@@ -1,6 +1,7 @@
 import { Plus } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FieldType } from '../../lib/api/fields.ts';
+import { DisplayBox, EditableShell, NO_SPINNER, SHELL_INPUT } from '../inline/editable-shell.tsx';
 import { InlineEdit } from '../inline/inline-edit.tsx';
 import { InlineSelect } from '../inline/inline-select.tsx';
 import { RelationCell } from '../relations/relation-cell.tsx';
@@ -115,6 +116,12 @@ export function FieldRenderer({
         <UrlField value={url} onCommit={onCommit} isPending={isPending} ariaLabel={fieldKey} />
       );
     }
+    case 'image': {
+      const url = String(value ?? '');
+      return (
+        <ImageField value={url} onCommit={onCommit} isPending={isPending} ariaLabel={fieldKey} />
+      );
+    }
     case 'currency': {
       const code = (options?.[0] ?? 'EUR') as string;
       return (
@@ -217,7 +224,7 @@ function RelationField({
           <span
             key={tok}
             className={cn(
-              'inline-flex items-center gap-1 rounded-sm bg-card px-1.5 py-0.5 text-xs',
+              'inline-flex items-center gap-1 rounded-sm bg-card px-1.5 py-0.5 text-sm',
               resolved ? 'text-fg' : 'font-mono text-fg-3 line-through',
             )}
           >
@@ -286,20 +293,28 @@ function TextArea({
   isPending?: boolean;
 }) {
   const [draft, setDraft] = useState(value);
+  // TextArea is MULTI-LINE: the EditableShell is an inline `<span>` that owns a
+  // single-line box metric (`py-0.5` + the display↔edit box-equivalence is a
+  // single-line guarantee), which does NOT fit a 3-row textarea. Per the plan's
+  // explicit carve-out, the textarea keeps its OWN box (its own rounded/border/
+  // bg/padding + `rows` height) but ADOPTS the shell's FONT token (`text-sm`) so
+  // it stays font-consistent with the shell-rendered single-line fields. We wrap
+  // it in `EditableShell mode="edit"` for that font + focus/pending treatment;
+  // the textarea drops its own duplicated radius/border/bg/text-size so the shell
+  // is the single source of those, keeping only its multi-line padding + height.
   return (
-    <textarea
-      aria-label={ariaLabel}
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => {
-        if (draft !== value) onCommit(draft);
-      }}
-      rows={3}
-      className={cn(
-        'block w-full rounded-sm border border-border-light bg-shell px-2 py-1.5 text-sm text-fg input-focus',
-        isPending && 'opacity-60',
-      )}
-    />
+    <EditableShell mode="edit" isPending={isPending} className="block w-full p-0">
+      <textarea
+        aria-label={ariaLabel}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          if (draft !== value) onCommit(draft);
+        }}
+        rows={3}
+        className="block w-full bg-transparent px-1 py-1.5 text-fg outline-none focus-visible:shadow-none"
+      />
+    </EditableShell>
   );
 }
 
@@ -314,22 +329,59 @@ function NumberInput({
   ariaLabel: string;
   isPending?: boolean;
 }) {
+  const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(String(value));
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  // Focus + select on entering edit (the ref/effect pattern InlineEdit uses —
+  // avoids the autoFocus attribute, which biome flags for a11y).
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+  // DISPLAY state (parity with every other field): plain text until clicked, so
+  // the number field is NOT a permanently-lifted bordered box with native spinner
+  // arrows. Click/Enter enters edit.
+  if (!editing) {
+    return (
+      <DisplayBox
+        ariaLabel={ariaLabel}
+        isPending={isPending}
+        onEdit={() => {
+          setDraft(String(value));
+          setEditing(true);
+        }}
+      >
+        {value}
+      </DisplayBox>
+    );
+  }
+  // EDIT: the shell owns box metrics + the faint lift; the input fills it and
+  // HIDES the native spinner arrows (NO_SPINNER) so it reads as plain text.
   return (
-    <input
-      type="number"
-      aria-label={ariaLabel}
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => {
-        const n = Number(draft);
-        if (Number.isFinite(n) && n !== value) onCommit(n);
-      }}
-      className={cn(
-        'block w-32 rounded-sm border border-border-light bg-shell px-2 py-1 text-sm text-fg input-focus',
-        isPending && 'opacity-60',
-      )}
-    />
+    <EditableShell mode="edit" isPending={isPending} className="w-full">
+      <input
+        ref={inputRef}
+        type="number"
+        aria-label={ariaLabel}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          setEditing(false);
+          const n = Number(draft);
+          if (Number.isFinite(n) && n !== value) onCommit(n);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          if (e.key === 'Escape') {
+            setDraft(String(value));
+            setEditing(false);
+          }
+        }}
+        className={cn(SHELL_INPUT, NO_SPINNER)}
+      />
+    </EditableShell>
   );
 }
 
@@ -348,45 +400,37 @@ function DateInput({
   const [draft, setDraft] = useState(value);
   if (!editing) {
     return (
-      <span
-        role="button"
-        tabIndex={0}
-        aria-label={ariaLabel}
-        onClick={() => setEditing(true)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') setEditing(true);
-        }}
-        className={cn(
-          'inline-block cursor-text rounded-sm px-1 py-0.5 hover:bg-card',
-          isPending && 'opacity-60',
-        )}
-      >
+      <DisplayBox ariaLabel={ariaLabel} isPending={isPending} onEdit={() => setEditing(true)}>
         {value || <span className="text-fg-3"> </span>}
-      </span>
+      </DisplayBox>
     );
   }
+  // EDIT input migrated to the shell (Task 7). The hard `w-44` (176px) overflowed
+  // the date column (140px → now 160px) and clipped the native picker; the input
+  // now fills its container (`w-full`) and the shell owns box metrics + focus/
+  // pending treatment, matching NumberInput. All commit/Enter/Escape/blur
+  // handlers are preserved verbatim.
   return (
-    <input
-      type="date"
-      aria-label={ariaLabel}
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => {
-        setEditing(false);
-        if (draft !== value && draft) onCommit(draft);
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-        if (e.key === 'Escape') {
-          setDraft(value);
+    <EditableShell mode="edit" isPending={isPending} className="w-full">
+      <input
+        type="date"
+        aria-label={ariaLabel}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
           setEditing(false);
-        }
-      }}
-      className={cn(
-        'block w-44 rounded-sm border border-transparent bg-card px-1 py-0.5 text-fg input-focus',
-        isPending && 'opacity-60',
-      )}
-    />
+          if (draft !== value && draft) onCommit(draft);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          if (e.key === 'Escape') {
+            setDraft(value);
+            setEditing(false);
+          }
+        }}
+        className={SHELL_INPUT}
+      />
+    </EditableShell>
   );
 }
 
@@ -413,7 +457,7 @@ function MultiSelect({
       {current.map((c) => (
         <span
           key={c}
-          className="inline-flex items-center gap-1 rounded-sm bg-card px-1.5 py-0.5 text-xs text-fg"
+          className="inline-flex items-center gap-1 rounded-sm bg-card px-1.5 py-0.5 text-sm text-fg"
         >
           {c}
           <button
@@ -494,23 +538,106 @@ function UrlField({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   if (!editing) {
+    // DISPLAY: the shell owns box metrics + hover/pending; the <a> keeps ONLY its
+    // link affordance (text-primary underline) + the metaKey/ctrlKey-opens-link /
+    // plain-click-edits behavior. The shell's hover:bg-card layers under the
+    // link's hover:underline — both are intentional.
     return (
-      <a
-        href={value}
-        target="_blank"
-        rel="noreferrer"
-        onClick={(e) => {
-          if (e.metaKey || e.ctrlKey) return;
-          e.preventDefault();
-          setEditing(true);
+      <EditableShell mode="display" isPending={isPending} className="w-full">
+        <a
+          href={value}
+          target="_blank"
+          rel="noreferrer"
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey) return;
+            e.preventDefault();
+            setEditing(true);
+          }}
+          className="block truncate text-primary underline-offset-2 hover:underline"
+        >
+          {value || '(empty)'}
+        </a>
+      </EditableShell>
+    );
+  }
+  return (
+    <EditableShell mode="edit" isPending={isPending} className="w-full">
+      <input
+        type="url"
+        aria-label={ariaLabel}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          setEditing(false);
+          if (draft !== value) onCommit(draft);
         }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          if (e.key === 'Escape') {
+            setDraft(value);
+            setEditing(false);
+          }
+        }}
+        className={SHELL_INPUT}
+      />
+    </EditableShell>
+  );
+}
+
+// Scheme guard — the single security mitigation for the image field.
+// Rejects javascript:, data:, and any non-http(s) scheme so an attacker-supplied
+// frontmatter value can never become an <img src> or be committed back. Empty is
+// allowed (it clears the field).
+function isSafeImageUrl(u: string): boolean {
+  if (!u) return true;
+  try {
+    const p = new URL(u);
+    return p.protocol === 'http:' || p.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+// DELIBERATE shell carve-out (like TextArea's multi-line case): an image field
+// is a thumbnail + URL input, not a single-line text box, so it keeps its own
+// box styling and the `isSafeImageUrl` scheme guard rather than rendering
+// through EditableShell. Not a sibling-audit miss.
+function ImageField({
+  value,
+  onCommit,
+  isPending,
+  ariaLabel,
+}: {
+  value: string;
+  onCommit: (v: string) => void;
+  isPending?: boolean;
+  ariaLabel: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        aria-label={ariaLabel}
+        onClick={() => setEditing(true)}
         className={cn(
-          'truncate text-primary underline-offset-2 hover:underline',
+          'inline-flex items-center rounded-md hover:bg-card',
           isPending && 'opacity-60',
         )}
       >
-        {value || '(empty)'}
-      </a>
+        {value && isSafeImageUrl(value) ? (
+          <img
+            src={value}
+            alt={ariaLabel}
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            className="h-16 w-16 rounded-md object-cover"
+          />
+        ) : (
+          <span className="text-fg-3">{value || '(no image)'}</span>
+        )}
+      </button>
     );
   }
   return (
@@ -521,7 +648,11 @@ function UrlField({
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => {
         setEditing(false);
-        if (draft !== value) onCommit(draft);
+        if (draft !== value) {
+          // Reject an unsafe scheme: revert the draft, never commit it.
+          if (isSafeImageUrl(draft)) onCommit(draft);
+          else setDraft(value);
+        }
       }}
       onKeyDown={(e) => {
         if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
@@ -568,45 +699,42 @@ function CurrencyInput({
   const [draft, setDraft] = useState(value == null ? '' : String(value));
   const formatter = getCurrencyFormatter(currency);
   if (!editing) {
+    // DISPLAY: right-aligned mono. The shell owns box metrics + right-align +
+    // hover/pending; the inner element keeps only `font-mono`. The interactive
+    // wrapper holds the enter-edit handlers.
     return (
-      <span
-        role="button"
-        tabIndex={0}
-        onClick={() => setEditing(true)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') setEditing(true);
-        }}
-        className={cn(
-          'inline-block w-full cursor-text rounded-sm px-1 py-0.5 text-right font-mono hover:bg-card',
-          isPending && 'opacity-60',
-        )}
+      <DisplayBox
+        ariaLabel={ariaLabel}
+        align="right"
+        isPending={isPending}
+        className="font-mono"
+        onEdit={() => setEditing(true)}
       >
         {value == null ? ' ' : formatter.format(value)}
-      </span>
+      </DisplayBox>
     );
   }
   return (
-    <input
-      type="number"
-      aria-label={ariaLabel}
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => {
-        setEditing(false);
-        const n = Number(draft);
-        if (Number.isFinite(n) && n !== value) onCommit(n);
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-        if (e.key === 'Escape') {
-          setDraft(value == null ? '' : String(value));
+    <EditableShell mode="edit" align="right" isPending={isPending} className="w-full font-mono">
+      <input
+        type="number"
+        aria-label={ariaLabel}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
           setEditing(false);
-        }
-      }}
-      className={cn(
-        'block w-32 rounded-sm border border-border-light bg-shell px-2 py-1 text-right text-sm font-mono text-fg input-focus',
-        isPending && 'opacity-60',
-      )}
-    />
+          const n = Number(draft);
+          if (Number.isFinite(n) && n !== value) onCommit(n);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          if (e.key === 'Escape') {
+            setDraft(value == null ? '' : String(value));
+            setEditing(false);
+          }
+        }}
+        className={cn(SHELL_INPUT, 'text-right font-mono', NO_SPINNER)}
+      />
+    </EditableShell>
   );
 }

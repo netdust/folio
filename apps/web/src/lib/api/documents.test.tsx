@@ -11,6 +11,12 @@ import {
   useUpdateDocument,
 } from './documents.ts';
 
+/** The infinite-query cache shape react-query stores for useInfiniteDocuments. */
+interface InfiniteCache {
+  pages: DocumentListPage[];
+  pageParams: unknown[];
+}
+
 function wrapperOf(qc: QueryClient) {
   return ({ children }: { children: React.ReactNode }) => (
     <QueryClientProvider client={qc}>{children}</QueryClientProvider>
@@ -430,6 +436,99 @@ describe('useUpdateDocument optimistic re-sort', () => {
       const cached = qc.getQueryData<DocumentListPage>(listKey);
       expect(cached?.data.map((d) => d.slug)).toEqual(['card-a', 'card-b']);
       expect(cached?.data.find((d) => d.slug === 'card-a')?.title).toBe('Renamed');
+    });
+  });
+});
+
+// The table reads via useInfiniteDocuments, whose cache shape is
+// { pages: [{data, nextCursor}], pageParams } — NOT the plain { data, nextCursor }
+// the older tests seed. onMutate must patch that shape, or it throws
+// `Cannot read properties of undefined (reading 'map')` and ABORTS the mutation,
+// so no field/status edit ever reaches the server. Regression: 2026-06-17.
+describe('useUpdateDocument optimistic patch over the INFINITE cache shape', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function stubPatchFetch() {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(
+        async () =>
+          new Response('{"data":{}}', {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+      ),
+    );
+  }
+
+  it('patches a row in an infinite (multi-page) cache without throwing', async () => {
+    stubPatchFetch();
+    const listParams = { type: 'work_item' as const, sort: 'updated_at', dir: 'desc' as const };
+    const listKey = documentsKeys.list('acme', 'web', 'work-items', listParams);
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    // Seed the INFINITE shape: row to edit lives on page 2.
+    qc.setQueryData<InfiniteCache>(listKey, {
+      pages: [
+        { data: [doc({ id: 'a', slug: 'card-a' })], nextCursor: 'c1' },
+        { data: [doc({ id: 'b', slug: 'card-b', status: 'todo' })], nextCursor: null },
+      ],
+      pageParams: [undefined, 'c1'],
+    });
+
+    const { result } = renderHook(
+      () => useUpdateDocument('acme', 'web', 'work-items', listParams),
+      {
+        wrapper: wrapperOf(qc),
+      },
+    );
+
+    // Before the fix this throws synchronously in onMutate and the mutation never fires.
+    void result.current.mutate({ slug: 'card-b', patch: { status: 'done' } });
+
+    await waitFor(() => {
+      const cached = qc.getQueryData<InfiniteCache>(listKey);
+      const row = cached?.pages.flatMap((p) => p.data).find((d) => d.slug === 'card-b');
+      expect(row?.status).toBe('done');
+    });
+    // The PATCH request actually went out (onMutate did not abort).
+    expect(fetch).toHaveBeenCalled();
+  });
+
+  it('optimistically merges a frontmatter field over the infinite cache', async () => {
+    stubPatchFetch();
+    const listParams = { type: 'work_item' as const, sort: 'updated_at', dir: 'desc' as const };
+    const listKey = documentsKeys.list('acme', 'web', 'work-items', listParams);
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    qc.setQueryData<InfiniteCache>(listKey, {
+      pages: [
+        {
+          data: [doc({ id: 'a', slug: 'card-a', frontmatter: { priority: 'low', keep: 'me' } })],
+          nextCursor: null,
+        },
+      ],
+      pageParams: [undefined],
+    });
+
+    const { result } = renderHook(
+      () => useUpdateDocument('acme', 'web', 'work-items', listParams),
+      {
+        wrapper: wrapperOf(qc),
+      },
+    );
+
+    void result.current.mutate({ slug: 'card-a', patch: { frontmatter: { priority: 'high' } } });
+
+    await waitFor(() => {
+      const cached = qc.getQueryData<InfiniteCache>(listKey);
+      const row = cached?.pages[0].data.find((d) => d.slug === 'card-a');
+      expect(row?.frontmatter).toEqual({ priority: 'high', keep: 'me' });
     });
   });
 });

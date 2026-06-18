@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import {
   events,
@@ -71,6 +71,36 @@ test('POST without an explicit order assigns a UNIQUE order (max+10), not 0', as
   const all = await app.request(path, { headers: { Cookie: seed.sessionCookie } });
   const orders = (await all.json()).data.map((v: { order: number }) => v.order);
   expect(new Set(orders).size).toBe(orders.length);
+});
+
+test('POST accepts every widened view type (table/calendar/timeline/gallery)', async () => {
+  // Phase 6: the seed + 0038 backfill WRITE type:'table' rows, but the API
+  // boundary only accepted 'list'|'kanban' — so any create/patch carrying one of
+  // the new types was rejected 422. Widening the enum closes that validation-vs-use
+  // gap. 'table' is the renamed spreadsheet view the seed/backfill now write.
+  const { app, seed } = await makeTestApp();
+  for (const type of ['table', 'calendar', 'timeline', 'gallery']) {
+    const res = await app.request(path, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `View ${type}`, type }),
+    });
+    expect(res.status).toBe(201);
+  }
+});
+
+test('POST 400 still REJECTS an unknown view type after the widen', async () => {
+  // The denial path: widening the enum must NOT make it permissive — an unknown
+  // type is still rejected. The zValidator Zod boundary returns 400 on an enum
+  // mismatch (cf. documents.test.ts UNSUPPORTED_TYPE_FILTER), distinct from the
+  // 422 that the downstream filter-validation HTTPError uses.
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Bogus', type: 'bogus' }),
+  });
+  expect(res.status).toBe(400);
 });
 
 test('POST 422 INVALID_FILTER on bad operator', async () => {
@@ -198,6 +228,76 @@ test('POST returns data.view.id as a unique non-empty string', async () => {
   expect(bId).not.toBe(aId);
 });
 
+// --- Phase 6 (views): per-view `settings` JSON column round-trip ---
+
+test('POST /views persists `settings` and round-trips it via create AND list', async () => {
+  // Contract: the new views.settings JSON column accepts a per-view config blob,
+  // returns it on the create response, AND surfaces it on the list read. An
+  // unknown key inside settings must survive intact (no schema strip) — the
+  // column is freeform JSON, like filters.
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Calendar',
+      type: 'list',
+      settings: { dateField: 'due_date', unknownKey: { nested: 42 } },
+    }),
+  });
+  expect(res.status).toBe(201);
+  const created = await res.json();
+  // Round-trips on the create response.
+  expect(created.data.view.settings).toEqual({
+    dateField: 'due_date',
+    unknownKey: { nested: 42 },
+  });
+  const id = created.data.view.id as string;
+
+  // Round-trips on the list read (real read path, not the echoed insert row).
+  const get = await app.request(path, { headers: { Cookie: seed.sessionCookie } });
+  const list = await get.json();
+  const row = list.data.find((v: { id: string }) => v.id === id);
+  expect(row.settings).toEqual({ dateField: 'due_date', unknownKey: { nested: 42 } });
+});
+
+test('POST /views defaults `settings` to {} when omitted', async () => {
+  // Boundary: a view created without settings reads back as {} (NOT NULL default),
+  // never null/undefined — so consumers can index it unconditionally.
+  const { app, seed } = await makeTestApp();
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Plain', type: 'list' }),
+  });
+  expect(res.status).toBe(201);
+  const id = (await res.json()).data.view.id as string;
+  const get = await app.request(path, { headers: { Cookie: seed.sessionCookie } });
+  const row = (await get.json()).data.find((v: { id: string }) => v.id === id);
+  expect(row.settings).toEqual({});
+});
+
+test('PATCH /views/:id updates `settings`', async () => {
+  const { app, seed } = await makeTestApp();
+  const created = await (
+    await app.request(path, {
+      method: 'POST',
+      headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'S', type: 'list' }),
+    })
+  ).json();
+  const id = created.data.view.id as string;
+  const res = await app.request(`${path}/${id}`, {
+    method: 'PATCH',
+    headers: { Cookie: seed.sessionCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ settings: { dateField: 'created_at' } }),
+  });
+  expect(res.status).toBe(200);
+  const get = await app.request(path, { headers: { Cookie: seed.sessionCookie } });
+  const row = (await get.json()).data.find((v: { id: string }) => v.id === id);
+  expect(row.settings).toEqual({ dateField: 'created_at' });
+});
+
 // --- Phase 2 (operator): config:write guard + dryRun (P2-2/3/4/6/8) ---
 
 async function mintTokens(
@@ -312,6 +412,30 @@ test('DELETE /views: dryRun delete does not mutate an existing view', async () =
   expect(data.would).toBe('delete');
   expect(await viewCount(db, seed.project.id)).toBe(beforeViews);
   expect(await eventCount(db)).toBe(beforeEvents);
+});
+
+test('DELETE /views: the DEFAULT view cannot be deleted (the main table view is protected)', async () => {
+  // Deleting the seed default view left the table with no default → no way to get
+  // back to the plain table (Stefan, 2026-06-18). The default view is protected.
+  const { app, db, seed } = await makeTestApp();
+  const { configWriteToken } = await mintTokens(db, seed);
+  const table = await db.query.tables.findFirst({
+    where: and(eq(tables.projectId, seed.project.id), eq(tables.slug, 'work-items')),
+  });
+  if (!table) throw new Error('test setup: seed work-items table missing');
+  const def = await db.query.views.findFirst({
+    where: and(eq(views.tableId, table.id), eq(views.isDefault, true)),
+  });
+  if (!def) throw new Error('test setup: seed default view missing');
+  const before = await viewCount(db, seed.project.id);
+
+  const res = await app.request(`${path}/${def.id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${configWriteToken}` },
+  });
+  expect(res.status).toBe(409);
+  // The default view is still there — nothing deleted.
+  expect(await viewCount(db, seed.project.id)).toBe(before);
 });
 
 test('POST /views: dryRun resource matches the live created view (minus id)', async () => {

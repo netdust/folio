@@ -1,4 +1,6 @@
+import type { GroupedListSettings } from '@folio/shared';
 import { useNavigate } from '@tanstack/react-router';
+import { Calendar, Columns3, GanttChart, Image, List, type LucideIcon, Table } from 'lucide-react';
 import { type FormEvent, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { useFields } from '../../lib/api/fields.ts';
@@ -6,7 +8,10 @@ import { formatApiError } from '../../lib/api/index.ts';
 import { type ViewCreate, useCreateView } from '../../lib/api/views.ts';
 import { resolveViewNav } from '../../lib/rail-nav.ts';
 import { Button } from '../ui/button.tsx';
+import { cn } from '../ui/cn.ts';
+import { Icon } from '../ui/icon.tsx';
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '../ui/sheet.tsx';
+import { GroupedListConfig, defaultGroupedListSettings } from './grouped-list-config.tsx';
 
 export interface NewViewSheetProps {
   open: boolean;
@@ -31,6 +36,24 @@ export interface NewViewSheetProps {
 
 const FILTER_KEYS = ['status', 'priority', 'assignee', 'labels', 'updated_since'] as const;
 
+// Phase 6: the user-creatable view types. `table` leads — it's the plain flat
+// spreadsheet (the same renderer the seed default uses). It was originally
+// omitted on the assumption it was seed-only, but deleting the default
+// table-view left no way to make another flat table (Stefan, 2026-06-18), so it
+// IS user-creatable here. The view's TYPE is decided by <ViewRouter> from the
+// saved view; this sheet only records which one to create. `table` needs no
+// extra payload (buildPayload only special-cases kanban/list); calendar/timeline/
+// gallery defer their date-field / cover-field selects to the view's own toolbar.
+const VIEW_TYPES = [
+  { value: 'table', label: 'Table', icon: Table },
+  { value: 'list', label: 'List', icon: List },
+  { value: 'kanban', label: 'Kanban', icon: Columns3 },
+  { value: 'calendar', label: 'Calendar', icon: Calendar },
+  { value: 'timeline', label: 'Timeline', icon: GanttChart },
+  { value: 'gallery', label: 'Gallery', icon: Image },
+] as const satisfies ReadonlyArray<{ value: string; label: string; icon: LucideIcon }>;
+type NewViewType = (typeof VIEW_TYPES)[number]['value'];
+
 export function NewViewSheet({
   open,
   onOpenChange,
@@ -47,16 +70,22 @@ export function NewViewSheet({
   // created on — not a hardcoded work-items literal.
   const { data: fields } = useFields(wslug, pslug, tslug);
   const [name, setName] = useState('');
-  const [type, setType] = useState<'list' | 'kanban'>('list');
+  const [type, setType] = useState<NewViewType>('list');
   // Group-by for kanban. 'status' is the default; selecting it stores null on
   // the view per the "defaults to status" convention (see board-controls).
   const [groupBy, setGroupBy] = useState('status');
+  // L.4: the grouped-list config for a `list` view. Defaults to group-by status
+  // + a single `count` aggregate; written into payload.settings on create.
+  const [listSettings, setListSettings] = useState<GroupedListSettings>(
+    defaultGroupedListSettings(),
+  );
 
   useEffect(() => {
     if (!open) {
       setName('');
       setType('list');
       setGroupBy('status');
+      setListSettings(defaultGroupedListSettings());
     }
   }, [open]);
 
@@ -86,6 +115,13 @@ export function NewViewSheet({
     // a field key is stored verbatim. A list view omits groupBy entirely.
     if (type === 'kanban') {
       payload.groupBy = groupBy === 'status' ? null : groupBy;
+    }
+    // L.4: a list view carries its grouped-list config in `settings`. Only write
+    // it for list — every other type defaults `settings` to `{}` server-side.
+    // Spread into a plain record: `settings` is the permissive JSON column
+    // (`Record<string, unknown>`), and a typed interface has no index signature.
+    if (type === 'list') {
+      payload.settings = { ...listSettings };
     }
     // V2: capture the current columns so the new view starts as a copy of what the
     // user is looking at (the sheet copy's promise). Only include keys that have a
@@ -143,29 +179,40 @@ export function NewViewSheet({
 
             <fieldset>
               <legend className="block text-sm font-medium text-fg">Type</legend>
-              <div className="mt-1 flex gap-4">
-                <label className="flex items-center gap-2 text-sm text-fg-1">
-                  <input
-                    type="radio"
-                    name="view-type"
-                    value="list"
-                    checked={type === 'list'}
-                    onChange={() => setType('list')}
-                  />
-                  List
-                </label>
-                <label className="flex items-center gap-2 text-sm text-fg-1">
-                  <input
-                    type="radio"
-                    name="view-type"
-                    value="kanban"
-                    checked={type === 'kanban'}
-                    onChange={() => setType('kanban')}
-                  />
-                  Kanban
-                </label>
+              <div className="mt-2 grid grid-cols-3 gap-2">
+                {VIEW_TYPES.map((t) => {
+                  const selected = type === t.value;
+                  return (
+                    <button
+                      key={t.value}
+                      type="button"
+                      aria-label={t.label}
+                      aria-pressed={selected}
+                      onClick={() => setType(t.value)}
+                      className={cn(
+                        'flex flex-col items-center gap-1.5 rounded-md border px-2 py-3 text-xs transition-colors duration-fast',
+                        selected
+                          ? 'border-primary bg-primary text-primary-fg'
+                          : 'border-border-light bg-shell text-fg-1 hover:bg-card hover:text-fg',
+                      )}
+                    >
+                      <Icon icon={t.icon} size={20} />
+                      {t.label}
+                    </button>
+                  );
+                })}
               </div>
             </fieldset>
+
+            {type === 'list' && (
+              <GroupedListConfig
+                wslug={wslug}
+                pslug={pslug}
+                tslug={tslug}
+                value={listSettings}
+                onChange={setListSettings}
+              />
+            )}
 
             {type === 'kanban' && (
               <div>

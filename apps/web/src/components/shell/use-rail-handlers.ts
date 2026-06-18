@@ -1,3 +1,4 @@
+import type { ViewType } from '@folio/shared';
 import type { QueryClient } from '@tanstack/react-query';
 import type { useNavigate } from '@tanstack/react-router';
 import { type MutableRefObject, useMemo } from 'react';
@@ -67,7 +68,7 @@ export function useRailHandlers(deps: UseRailHandlersDeps): RailTreeHandlers {
           params: target.withTslug ? { wslug, pslug, tslug } : { wslug, pslug },
         });
       },
-      onViewClick: (pslug: string, tslug: string, viewId: string, type: 'list' | 'kanban') => {
+      onViewClick: (pslug: string, tslug: string, viewId: string, type: ViewType) => {
         // Default table → /work-items|/board; non-default → /t/$tslug(/board).
         const target = resolveViewNav(tslug, type);
         // Preserve ?doc= (open slideover) but drop the previous view's filter

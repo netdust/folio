@@ -4,6 +4,7 @@ import type { View } from '../../lib/api/views.ts';
 import {
   type Column,
   applyColumnOrder,
+  columnWidth,
   effectiveVisibleKeys,
   gridTemplate,
   mergeColumns,
@@ -293,5 +294,29 @@ describe('gridTemplate', () => {
 
   it('returns empty string when given no columns', () => {
     expect(gridTemplate([])).toBe('');
+  });
+
+  it('contains no flexible track — full-width fill must NOT live in gridTemplate (Bug E guard)', () => {
+    // T2 (2026-06-17): the table fills the viewport via `min-w-full` on the
+    // w-max scroll wrapper, NOT via a flexible grid track. Re-introducing a
+    // `1fr` / `auto` / `minmax(...)` track here is the Bug-E regression: it puts
+    // a gap between the last column header label and its cells. Lock it out.
+    const tpl = gridTemplate([titleCol, statusCol, tagsCol]);
+    expect(tpl).not.toMatch(/fr\b/);
+    expect(tpl).not.toContain('auto');
+    expect(tpl).not.toContain('minmax');
+    for (const track of tpl.split(' ')) {
+      expect(track).toMatch(/^\d+px$/);
+    }
+  });
+});
+
+// Native date inputs need ~150px+ for the dd/mm/yyyy + spinner/calendar glyph.
+const MIN_DATE_EDIT_WIDTH = 150;
+
+describe('date column width fits the date edit control', () => {
+  it('a date field column is at least the date edit control min-width', () => {
+    const col: Column = { key: 'due', label: 'Due', source: 'field', fieldType: 'date' };
+    expect(columnWidth(col)).toBeGreaterThanOrEqual(MIN_DATE_EDIT_WIDTH);
   });
 });

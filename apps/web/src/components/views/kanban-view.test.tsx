@@ -14,13 +14,16 @@ import { z } from 'zod';
 import { boardControlsBus } from '../../lib/board-controls-bus.ts';
 import { KanbanView } from './kanban-view.tsx';
 
-function setup() {
+function setup(initialEntry = '/w/main/p/web/board') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
   const board = createRoute({
     getParentRoute: () => rootRoute,
     path: '/w/$wslug/p/$pslug/board',
-    validateSearch: z.object({ doc: z.string().optional() }),
+    validateSearch: z.object({
+      doc: z.string().optional(),
+      status: z.union([z.string(), z.array(z.string())]).optional(),
+    }),
     component: () => {
       const { wslug, pslug } = board.useParams();
       return <KanbanView wslug={wslug} pslug={pslug} tslug="work-items" />;
@@ -28,7 +31,7 @@ function setup() {
   });
   const router = createRouter({
     routeTree: rootRoute.addChildren([board]),
-    history: createMemoryHistory({ initialEntries: ['/w/main/p/web/board'] }),
+    history: createMemoryHistory({ initialEntries: [initialEntry] }),
   });
   return { queryClient, router };
 }
@@ -493,6 +496,124 @@ describe('KanbanView', () => {
       expect(documentsUrls.some((u) => u.includes('sort=updated_at'))).toBe(true),
     );
     expect(router.state.location.search).toEqual({});
+  });
+
+  // C1 (filter-on-every-view): a status filter in the URL must MERGE into the
+  // board's sort-based listParams and reach the documents fetch. Kanban built
+  // listParams from SORT only and never merged the shared FilterBar's clause.
+  it('a status filter in the URL narrows the board documents fetch (status reaches the wire)', async () => {
+    const documentsUrls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url) => {
+        const u = String(url);
+        if (u.includes('/statuses')) {
+          return new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: 's1',
+                  key: 'todo',
+                  name: 'Todo',
+                  color: '#6EAFFF',
+                  category: 'unstarted',
+                  order: 1,
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (u.includes('/documents')) {
+          documentsUrls.push(u);
+          return new Response(
+            JSON.stringify({
+              data: {
+                data: [
+                  {
+                    id: 'd1',
+                    slug: 'a',
+                    type: 'work_item',
+                    title: 'Card A',
+                    status: 'todo',
+                    parentId: null,
+                    frontmatter: {},
+                    createdAt: '',
+                    updatedAt: new Date().toISOString(),
+                  },
+                ],
+                nextCursor: null,
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response('{"data":[]}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
+
+    const { queryClient, router } = setup('/w/main/p/web/board?status=todo');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(documentsUrls.length).toBeGreaterThan(0));
+    // The filter clause MERGED into the sort-based params: status=todo reaches
+    // the wire AND the board's manual board_position sort is preserved.
+    expect(documentsUrls.some((u) => u.includes('status=todo'))).toBe(true);
+    expect(documentsUrls.some((u) => u.includes('sort=board_position'))).toBe(true);
+  });
+
+  // Negative case: NO filter in the URL → no status param leaks onto the wire.
+  it('no filter in the URL leaves status off the board documents fetch', async () => {
+    const documentsUrls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (url) => {
+        const u = String(url);
+        if (u.includes('/documents')) {
+          documentsUrls.push(u);
+          return new Response(
+            JSON.stringify({
+              data: {
+                data: [
+                  {
+                    id: 'd1',
+                    slug: 'a',
+                    type: 'work_item',
+                    title: 'Card A',
+                    status: 'todo',
+                    parentId: null,
+                    frontmatter: {},
+                    createdAt: '',
+                    updatedAt: new Date().toISOString(),
+                  },
+                ],
+                nextCursor: null,
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response('{"data":[]}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
+
+    const { queryClient, router } = setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(documentsUrls.length).toBeGreaterThan(0));
+    expect(documentsUrls.every((u) => !u.includes('status='))).toBe(true);
   });
 
   // BF2 (2026-05-31): a short column's tinted background stopped at its last

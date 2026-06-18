@@ -1,4 +1,43 @@
-# 🎯 CURRENT (2026-06-15) — v1-hardening from docs/AUDIT-2026-06-10.md
+# 🎯 CURRENT (2026-06-18) — Phase 6 (Views) — VIEW WORK COMPLETE, branch `phase-6/views` (UNMERGED, tip `2cdaa49f`, ~100 commits ahead of main)
+
+**Stefan called the view work DONE 2026-06-18.** NOT merged — Stefan gates the merge + still owes a full browser-eyeball pass on the non-kanban UI. Suites ALL green: web **1137** / server **1916** / shared **82**, tsc + root lint clean.
+
+### Final view fixes (2026-06-18, after kanban):
+- **Double padding** (`83efd2ef`): calendar/timeline + 3 skeletons re-applied `px-[22px] py-2` on top of MainFrame's container → mis-aligned with header. Stripped (kanban/wiki-tree already correct).
+- **Control scale** (`31791d73`): calendar/timeline used native selects + bordered buttons at text-sm; restyled to the board/list compact borderless pill scale (text-xs), kept native selects.
+- **Table view creatable + default protected** (`2cdaa49f`): new-view sheet now offers `table` (was seed-only); server 409s on deleting an `isDefault` view (VIEW_PROTECTED) + rail hides Delete on it. ⚠️ RESIDUAL: Stefan's own project still has its default table-view deleted — the guard only prevents FUTURE deletes; if that project looks wedged, may need a one-off re-mark-default recovery (flagged, not done).
+
+### This session (2026-06-17) — field UX-quality pass + assignee picker, all on top of the earlier Chunk A/B work
+- **Blocking bug fixed (`b1069bbf`):** every inline field/status edit silently no-op'd — `useUpdateDocument` onMutate did `prevList.data.map` but the table uses `useInfiniteDocuments` ({pages} shape) → threw → mutation aborted. Now shape-detects + patches all pages. See auto-mem `feedback_folio-can-edit-bug-infinite-cache`.
+- **Field-shell pass (`022bb4f4`..`969715c1`):** new `EditableShell` = single styling convergence point; every inline field (InlineEdit/InlineSelect/Date/Number/Currency/Url/Text + chips) renders through it. Fixed: font-grow-on-edit, dropdown font mismatch, date overflow, subtle focus (faint bg no ring), status Pill→text-sm, full-height column separators + vertical centering, number/currency display-state + spinner-arrows removed, date midline centering. Refined popover motion (scale+fade, reduced-motion respected).
+- **Assignee picker in table (`d8acc86d`..`5c814f57`):** `key==='assignee'` cell now renders the AssigneePicker (was plain text) + a type-to-filter search box (`lib/assignee-filter.ts`); trigger restyled to the borderless field look. Plan: `docs/superpowers/plans/2026-06-17-assignee-picker-in-table.md`. Field-shell plan: `2026-06-17-field-shell-ux-pass.md`.
+- **Pre-merge review (`4b47f999`):** both reviewers (efficiency + correctness) = clean, no Critical/Important. Folded findings: SHELL_INPUT/NO_SPINNER constants + DisplayBox (killed field-layer dup), boxMetrics hoisted, ImageField carve-out comment. (Full-suite caught a dropped aria-label mid-cleanup → DisplayBox forwards ariaLabel.)
+
+### Also shipped 2026-06-17 PM (after the field/assignee work)
+- **New view inherits source view's VISIBLE columns** (`92f4447b`/`b1ca2f1d`/`799f34b6`): was defaulting to 3 builtins because the main view's saved `visibleFields` is null. Fix = cross-tree module store `current-columns-store.ts` (rail↔TableView are render SIBLINGS, no lift possible) — TableView publishes `visibleColumns` keys, `resolveNewViewColumns` (RED-first) reads snapshot-preferred/raw-view-fallback, wired in `w.$wslug.tsx`.
+- **Table full-width** (`b1ca2f1d`/`b11ff685`): `w-max`→`w-max min-w-full` on the scroll wrapper. gridTemplate UNTOUCHED (Bug E intact), locked by a strengthened no-flexible-track contract test. Suite now **1117**.
+
+### Kanban DnD — DONE + USER-VERIFIED IN BROWSER 2026-06-18 (`717fd4bb`..`66f78a07`, suite **1137**)
+"Not smooth" (3× failed) was DROP-CORRECTNESS, not perf (Stefan reframed via specific repros + a captured console log). Stayed on @dnd-kit, LINE school (Trello/Jira; NOT move-items). Fixes, in order:
+- **Core (`717fd4bb`..`73f70f7a`):** `getClosestEdge` primitive; edge-aware `dropSlotPosition` (bottom-of-last→append, killed `movingDown`); card key `${id}:${col}` remount busts dnd-kit's identity-cached stale rect; onDragOver→drop-indicator (STATE ONLY).
+- **`90de3ebc`:** within-column reorder snapped back unless you over-traveled past the midpoint → fix: edge from real POINTER Y (`activatorEvent.clientY + delta.y`), not the dragged-card rect (which sits ~on the midpoint while siblings shift).
+- **`c99b1e92`:** same-column reorder now commits dnd-kit's OWN order (`reorderSlotPosition` = arrayMove + rank between resulting neighbors) so "gap opens = drops there" by construction (no over-travel threshold).
+- **`120dd95f`:** (a) empty-column drops easy via custom `boardCollisionDetection` (pointerWithin→closestCorners); (b) **the proven jump-back bug** — a column with a ranked + an UNRANKED(null) card computed rankBetween(null,null)="V" = a TIE with the existing rank → `computeReorderPosition` now SKIPS null neighbors to the nearest RANKED one (captured via temp console.log, removed after).
+- **`b246fd7e`:** drop-line moved OUT of the card (was `absolute` inside it → followed the sliding card) → now a flex SIBLING in `KanbanColumn` between cards.
+- **`66f78a07`:** drop settle — animate the REAL landed card (`animate-in zoom-in-95 fade-in-0` ~150ms, cleared via onAnimationEnd), NOT the overlay (overlay fade = duplicate-card flicker, `dropAnimation={null}` stays).
+- **Stefan confirmed in-browser: "it all seems to work, smooth."** Tuning knobs if revisited: settle `duration-150`/`zoom-in-95`; drop-line `-my-1` offset.
+
+### ⏳ STILL TO DO before merge
+- **Stefan's browser-eyeball pass on the NON-kanban work** (jsdom can't verify): B1 long-title truncation, B2 mixed-field vertical centering, B3 no font-grow on edit, B4 date picker fits column, B5 reduced-motion wins on popover; assignee flows; create-view-inherits-columns (main + bugs table), table fills width / h-scroll borders. (Kanban = user-verified ✓.)
+- **Deferred view item, NOT started:** calendar width/selected-date. (table full-width + kanban DnD = DONE.)
+- Earlier-held: Cluster 6 (gallery + G3) — still HELD. Then whole-branch Stage-3 shake-out + actual merge (Stefan-gated).
+- Non-blocking dup follow-up still open: shared `GroupByPopover` (ListControls↔BoardToolbar).
+- Earlier-held: Cluster 6 (gallery + G3) — still HELD. Then whole-branch Stage-3 shake-out + actual merge (Stefan-gated).
+- Non-blocking dup follow-up still open: shared `GroupByPopover` (ListControls↔BoardToolbar).
+
+---
+
+# v1-hardening from docs/AUDIT-2026-06-10.md (background — M0–M2 merged)
 
 **Driving the audit to v1 via `netdust-agent:harnessed-development`, scope = EVERYTHING (M0→M3), as ~5 gated branches, one milestone per session, Stefan gates each merge.** Full plan-of-plans + locked decisions: auto-memory `project_v1-hardening-audit-2026-06-10`.
 
@@ -282,3 +321,5 @@ See `docs/PHASES.md` for the canonical phase list (above-section mirrors it). Lo
 [2026-06-10] — session ended (no significant changes captured)
 [2026-06-15] — session ended (no significant changes captured)
 [2026-06-16] — session ended (no significant changes captured)
+[2026-06-17] — session ended (no significant changes captured)
+[2026-06-18] — session ended (no significant changes captured)

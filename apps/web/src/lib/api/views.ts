@@ -1,15 +1,24 @@
+import type { GroupedListSettings } from '@folio/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client } from './client.ts';
+
+// The grouped-list view's per-view config (stored in `View.settings`). Re-exported
+// from `@folio/shared` so view UI/renderer code imports the config type from the
+// same module as the other view API types, without mirroring the declaration.
+export type { GroupedListSettings };
 
 export interface View {
   id: string;
   name: string;
-  type: 'list' | 'kanban';
+  type: 'table' | 'list' | 'kanban' | 'calendar' | 'timeline' | 'gallery';
   filters: unknown;
   sort: unknown;
   groupBy: string | null;
   visibleFields: string[] | null;
   columnOrder: string[] | null;
+  // Per-view typed config (e.g. { dateField } for a calendar view). NOT NULL
+  // default {} on the column, so always an object on read — never null.
+  settings: Record<string, unknown>;
   isDefault: boolean;
   order: number;
 }
@@ -56,12 +65,13 @@ export function useViews(wslug: string, pslug: string, tslug: string) {
 
 export interface ViewCreate {
   name: string;
-  type: 'list' | 'kanban';
+  type: 'table' | 'list' | 'kanban' | 'calendar' | 'timeline' | 'gallery';
   filters?: unknown;
   sort?: unknown;
   visibleFields?: string[];
   columnOrder?: string[] | null;
   groupBy?: string | null;
+  settings?: Record<string, unknown> | null;
   isDefault?: boolean;
   order?: number;
 }
@@ -90,12 +100,13 @@ export function useCreateView(wslug: string, pslug: string, tslug: string) {
 
 export interface ViewPatch {
   name?: string;
-  type?: 'list' | 'kanban';
+  type?: 'table' | 'list' | 'kanban' | 'calendar' | 'timeline' | 'gallery';
   filters?: unknown;
   sort?: unknown;
   groupBy?: string | null;
   visibleFields?: string[];
   columnOrder?: string[] | null;
+  settings?: Record<string, unknown> | null;
   isDefault?: boolean;
   order?: number;
 }

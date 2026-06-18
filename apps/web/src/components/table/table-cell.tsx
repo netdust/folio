@@ -3,6 +3,7 @@ import type { DocumentSummary } from '../../lib/api/documents.ts';
 import type { Status } from '../../lib/api/statuses.ts';
 import { dueUrgency, urgencyClasses } from '../../lib/due-urgency.ts';
 import { relativeTime } from '../../lib/relative-time.ts';
+import { AssigneePicker } from '../assignee/assignee-picker.tsx';
 import { InlineEdit } from '../inline/inline-edit.tsx';
 import { InlineSelect } from '../inline/inline-select.tsx';
 import { FieldRenderer } from '../slideover/field-renderer.tsx';
@@ -15,6 +16,12 @@ interface Props {
   column: Column;
   doc: DocumentSummary;
   statuses: Status[];
+  // Workspace/project context — required because the assignee cell mounts the
+  // AssigneePicker, which needs them to load members + project-allowed agents.
+  // TableRow always has them, so they are required (a missed call site is a
+  // compile error).
+  wslug: string;
+  pslug: string;
   isPending: boolean;
   isSticky?: boolean;
   onOpen: (slug: string) => void;
@@ -32,6 +39,8 @@ export function TableCell({
   column,
   doc,
   statuses,
+  wslug,
+  pslug,
   isPending,
   isSticky = false,
   onOpen,
@@ -41,9 +50,21 @@ export function TableCell({
   resolveRelation,
 }: Props) {
   const content = renderContent();
-  if (!isSticky) return content;
+  // Every cell vertically centers its content with `flex items-center` so all
+  // field types align on the same midline regardless of their intrinsic box
+  // height (the native date input is taller than a text span, which otherwise
+  // made the date sit higher than its row siblings). `min-w-0` lets truncating
+  // children shrink. `border-l` draws the inter-column separator on EVERY
+  // non-sticky cell — including col 1, whose border-l owns the sticky↔col-1
+  // boundary line. The sticky cell therefore does NOT paint `border-r` (it would
+  // double up against col 1's border-l → a ~2px line at that one boundary while
+  // every other is 1px — ultrareview bug_007).
+  if (!isSticky)
+    return (
+      <div className="flex min-w-0 items-center border-l border-border-light px-3">{content}</div>
+    );
   return (
-    <div className="sticky left-0 z-[1] flex items-center border-r border-border-light bg-content pl-[22px] pr-3 group-hover/row:bg-card">
+    <div className="sticky left-0 z-[1] flex items-center bg-content pl-[22px] pr-3 group-hover/row:bg-card">
       {content}
     </div>
   );
@@ -101,6 +122,21 @@ export function TableCell({
     }
     if (!column.fieldType) return null;
     const value = doc.frontmatter?.[column.key];
+    // The `assignee` field renders the AssigneePicker (member/agent select +
+    // search), mirroring the slideover's `key === 'assignee'` branch — instead
+    // of the plain-text InlineEdit FieldRenderer gives `user_ref`. Same
+    // onFieldCommit path as every other field, so the optimistic write + event
+    // emission are identical.
+    if (column.key === 'assignee') {
+      return (
+        <AssigneePicker
+          wslug={wslug}
+          pslug={pslug}
+          value={typeof value === 'string' ? value : ''}
+          onChange={(next) => onFieldCommit(doc.slug, column.key, next)}
+        />
+      );
+    }
     // Generic across any date column — the "frontmatter is the schema" rule
     // means urgency must follow the type, not a hardcoded key like
     // `next_action_due`.
@@ -117,10 +153,13 @@ export function TableCell({
       />
     );
     if (!urgencyClass) return rendered;
-    // A normal block wrapper — color cascades into the date pill below it.
-    // Previously this was `display: contents` to avoid an extra box, but
-    // that element is stripped from the accessibility tree in Safari <17
-    // and breaks grid layout if FieldRenderer ever returns a fragment.
-    return <span className={cn('block', urgencyClass)}>{rendered}</span>;
+    // Urgency color wrapper (date cells only). Must be `flex items-center` — a
+    // plain `block` span collapsed to its content's baseline, so the date text
+    // sat above the row midline once the cell gained `flex items-center` (every
+    // other field returns `rendered` bare and centers directly). Centering this
+    // wrapper too puts the date on the same midline as its siblings.
+    // (`display: contents` is avoided — stripped from the a11y tree in Safari
+    // <17 and breaks grid layout if FieldRenderer returns a fragment.)
+    return <span className={cn('flex items-center', urgencyClass)}>{rendered}</span>;
   }
 }

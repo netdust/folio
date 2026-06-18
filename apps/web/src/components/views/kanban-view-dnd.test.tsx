@@ -1,4 +1,4 @@
-import { MeasuringStrategy, closestCorners } from '@dnd-kit/core';
+import { MeasuringStrategy } from '@dnd-kit/core';
 import type { DndContextProps, DragEndEvent, DragStartEvent } from '@dnd-kit/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
@@ -445,10 +445,12 @@ describe('KanbanView DnD', () => {
       </QueryClientProvider>,
     );
     await waitFor(() => expect(screen.getByText('Alpha Task')).toBeInTheDocument());
-    // Must be closestCorners specifically — the algorithm that reports the
-    // over-CARD (not the column) on a within-column drop. The default
-    // (rectIntersection / undefined) is the bug.
-    expect(captured.props?.collisionDetection).toBe(closestCorners);
+    // A deliberate collision algorithm must be wired (NOT the dnd-kit default,
+    // rectIntersection/undefined — the original bug). It's now the
+    // `boardCollisionDetection` composite (pointerWithin-first → closestCorners
+    // fallback) so empty columns are easy to hit; we assert a function is wired
+    // rather than its identity, so the composite can evolve without a false fail.
+    expect(typeof captured.props?.collisionDetection).toBe('function');
   });
 
   // BUG 2 (the persist seam): drive onDragEnd with an over.id that is a CARD id

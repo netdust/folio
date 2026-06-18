@@ -86,6 +86,57 @@ describe('KanbanCard', () => {
     );
     expect(screen.getByRole('button', { name: /Card A/ })).toBeTruthy();
   });
+
+  // The drop-line is rendered by KanbanColumn as a flex SIBLING between cards
+  // (moved out of the card so it doesn't follow the sliding cards). jsdom has no
+  // layout, so these only prove the line ELEMENT is interleaved at the right slot
+  // and absent without an indicator — positioning/no-follow is the browser pass.
+  function renderColumn(indicator: { overId: string; edge: 'top' | 'bottom' } | null) {
+    return render(
+      <DndContext>
+        <KanbanColumn
+          value="todo"
+          label="Todo"
+          count={2}
+          docIds={['d1', 'd2']}
+          indicator={indicator}
+          sortable
+        >
+          <KanbanCard doc={sampleDoc({ id: 'd1', title: 'Card A' })} onOpen={() => {}} sortable />
+          <KanbanCard doc={sampleDoc({ id: 'd2', title: 'Card B' })} onOpen={() => {}} sortable />
+        </KanbanColumn>
+      </DndContext>,
+    );
+  }
+
+  it('column renders the drop-line when an indicator is set', () => {
+    renderColumn({ overId: 'd1', edge: 'bottom' });
+    expect(screen.getByTestId('drop-line')).toBeTruthy();
+  });
+
+  it('column renders NO drop-line without an indicator', () => {
+    renderColumn(null);
+    expect(screen.queryByTestId('drop-line')).toBeNull();
+  });
+
+  it('places the line AFTER the over-card on edge "bottom"', () => {
+    const { container } = renderColumn({ overId: 'd1', edge: 'bottom' });
+    // Order within the column body: Card A, line, Card B.
+    const body = container.querySelector('[data-testid="kanban-column-body"]');
+    const texts = [
+      ...(body?.querySelectorAll('[data-testid="drop-line"], .font-medium') ?? []),
+    ].map((el) => el.getAttribute('data-testid') ?? el.textContent);
+    expect(texts).toEqual(['Card A', 'drop-line', 'Card B']);
+  });
+
+  it('places the line BEFORE the over-card on edge "top"', () => {
+    const { container } = renderColumn({ overId: 'd2', edge: 'top' });
+    const body = container.querySelector('[data-testid="kanban-column-body"]');
+    const texts = [
+      ...(body?.querySelectorAll('[data-testid="drop-line"], .font-medium') ?? []),
+    ].map((el) => el.getAttribute('data-testid') ?? el.textContent);
+    expect(texts).toEqual(['Card A', 'drop-line', 'Card B']);
+  });
 });
 
 // Bug 1 (2026-06-07): after a within-column drop the dragged card visibly slid

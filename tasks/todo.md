@@ -76,3 +76,107 @@ Order: A → E → D → B → C. Each cluster = a `── REVIEW GATE ──`. 
 
 ### Deferred (NOT this branch)
 virtualization · a11y (32) · reapStalePendingOps chunking · auth_rate_limits reaper · CI bun-pin · /mcp 413→JSON-RPC · full server-side frontmatter filter (if B1 picks affordance)
+
+---
+
+## Phase 6 (Views) — branch `phase-6/views`
+
+### Cluster 1 (renderAs foundation) — DONE, at FULL REVIEW GATE (Stefan sign-off)
+- [x] 1.0 views.settings JSON column (`1e0b9e85`)
+- [x] 1.0b backfill list→table + seed default=table (`a2e86dea`)
+- [x] 1.1 widen view-type enum, all 4 sites — closes type:'table' 422 (`778309ab`)
+- [x] 1.2 ViewRouter + useActiveView (renderer convergence, inv 18) (`0a0b71a2`)
+- [x] 1.3 unified /t/$tslug renders ViewRouter; legacy URLs redirect, no 404 (`19f196ec`)
+- [x] 1.5 resolveViewNav/resolveTableNav → always unified route (`c1d18b25`)
+- [x] 1.4 new-view sheet offers 5 user-creatable types (`f77b220b`)
+- [x] 1.6 project tabs → saved-view switcher + G4 operator toggle (`c3da9a23`)
+- [x] 1.7 invariant 18 updated; check:invariants 0/0/0 (`3527ff2e`)
+- [x] FULL review panel (reviewer + invariant-auditor + security-sentinel) — 0 Critical, 0 Important
+- [x] S1 review fix: removed dead activeTabFromPath (`1e443378`)
+- FINAL: server 1869 / web 967 / shared 80, 0 fail · 3 tsc clean · check:invariants 20/0/0
+
+### Deferred review items (carry into later clusters)
+- [ ] **Cluster 2b:** route table-view.tsx / kanban-view.tsx / board-controls.tsx through `useActiveView` (they open-code its `urlViewId→isDefault→list[0]` logic — pre-existing 4-copy convergence-debt; mind the `?? null` vs `undefined` boundary). [invariant-auditor concern]
+- [ ] **Cluster 2b:** add the GROUP-BY picker (+ aggregate specs + row layout) to the new-view sheet for `list` views — group-by is the list type's defining feature (like kanban's). Deliberately NOT added in Cluster 1 (Stefan, 2026-06-16): wire it together with the grouped-list renderer that reads it, not a half-wired control ahead of the renderer. The kanban group-by control in `new-view-sheet.tsx` is the pattern to extend to `list`.
+- [ ] **Cluster 4/5/6:** when a renderer first READS `views.settings` (settings.dateField etc.), add read-time value-shape validation + a payload-size bound on settings (today it's stored-only, freeform `z.record(z.unknown())`). [security-sentinel deferral]
+- [ ] **Later/cosmetic:** share `iconForViewType` so rail-tree row icons match the 5-way tab icons (rail currently 2-way kanban?Columns3:List). [reviewer S2]
+- [ ] **If "one table view per table" ever becomes an invariant:** add a server guard (table-view-creation is client-only-excluded today). [reviewer S3]
+
+### Cluster 2a (group-summary endpoint) — DONE, at FULL REVIEW GATE (Stefan sign-off)
+- [x] L.1 group-summary validator + service + endpoint, 8 threat-model mitigations as code (`63d7d441`)
+- [x] L.2 grouped-list settings types + useGroupSummary hook (`372dc444`)
+- [x] integration gate: route-level un-mocked-wire acceptance tests, 8 cases (`191d1b71`)
+- [x] FULL review panel: security-sentinel (8/8 mitigations IN-PLACE, 0 crit/imp) + generalist (found I-1) + performance-oracle (safe at v1, 0 crit)
+- [x] review fixes (`abfc1554`): FIX-1 ungrouped distribution no longer empty (+RED test) · MAX_DISTRIBUTION_SPECS=3 cap · index comment
+- FINAL: server 1909 / shared 80, 0 fail · tsc clean · group-summary tests 40 pass ×3 deterministic
+
+### Cluster 2a — deferred perf items (NOT v1 blockers; only matter at ~10k+ docs/project)
+- [ ] Perf I-2: parallelize the distribution sub-query loop — DEPRIORITIZED (bun:sqlite is synchronous; won't help until async pool).
+- [ ] Perf I-3: fold the ungrouped scalar bucket into the main GROUP BY (removes one full scan on the common path).
+- [ ] Perf S-2: constrain the distribution sub-query to the kept top-N groups (IN(...) on keptRows) instead of materializing all group×value pairs.
+
+### Cluster 2b (grouped-list renderer + config UI) — DONE, at STANDARD REVIEW GATE (Stefan sign-off)
+- [x] L.3 GroupedListView + 4 sub-components; page-2 guard (header=endpoint full-set, not loaded rows) (`8f8f11d3`)
+- [x] L.4 grouped-list config UI: group-by + aggregate builder (AGGREGATIONS whitelist sibling-site) + row-layout → settings (`95ff6417`)
+- [x] L.5 wire list → GroupedListView in viewRouter (`851063bb`)
+- [x] STANDARD review panel: generalist (neither escalation trigger fired; spec-key parity + page-2 guard correct; 3 Important) + simplicity (lean, 2 wins). NO security-sentinel (no 1a surface).
+- [x] LIVE browser feature-acceptance (seeded 128 docs in va-proj): grouped list renders; "done 82 items / status=done:100" header = FULL-set while pager "1–50 van 128"; Load more → "1–100 van 128" reaches todo/in_progress groups. Page-2 guard proven end-to-end.
+- [x] DEBUG (systematic): a stale `bun --hot` dev server 500'd live — root-caused to dev-env NOT code (direct call + green tests + fresh-server 200). Restarted server. Memory: feedback_stale-bun-hot-dev-server-500.
+- [x] review fixes (`32fe7755`): I-3 useInfiniteDocuments + Load more · I-1 surface summary.error · I-2 filter incomplete specs · S-1 dedupe defaults · S-2 hoist aggregateKey
+- FINAL: web 995 / server 1909 / shared 80, 0 fail · tsc clean. Seeded test data cleaned from dev DB.
+
+### Cluster 3 (image field type) — DONE, at FULL REVIEW GATE (Stefan sign-off)
+- [x] 2.1 enum across 4 boundaries (3 TS + the SQL CHECK the plan missed) + migration 0039 table-rebuild (`f208eb96`) + row-preservation migration test (`b964cc37`, controller-added)
+- [x] 2.2 image renderer + isSafeImageUrl scheme guard (gates render + commit) (`f56d2ab0`)
+- [x] 2.3 infer image from image-extension URLs (`584a3a29`); type-picker N/A (no <select> exists — types inferred/pinned)
+- [x] ESCALATED to FULL (migration = 1h data-layer trigger). Panel: security-sentinel (3/3 PASS: migration non-destructive, guard sound, no SSRF; ReDoS-tested) + generalist (0 Crit/0 Imp, "merge-ready"). Sibling-site audit clean.
+- FINAL: server 1915 / web 1002 / shared 82, 0 fail · tsc clean all 3.
+
+### Cluster 3 — deferred (optional, not blockers)
+- [ ] S1 (BOTH reviewers): server-side scheme reject on field write (defense-in-depth) — DO THIS when a 2nd image renderer lands (e.g. a table-grid image cell), so the client guard isn't the only defense. Today client-only is accepted (server never dereferences; the one renderer makes unsafe schemes inert).
+- [ ] S2: <img> onError → "(no image)" fallback (polish; matches UrlField's dead-link behavior). Optional.
+- [ ] S3: image inference is path-based (query-param image URLs without extension → url). Deliberate trade-off; do NOT "fix" into over-matching.
+
+### Cluster 4 (calendar view) — DONE, at STANDARD REVIEW GATE (Stefan sign-off)
+- [x] 3.1 calendar-grid pure date math, TZ-safe (Date.UTC + ISO-slice), verified ×3 under UTC-8/+14 (`86469073`)
+- [x] 3.2 calendar-view render: month grid + nav + slideover + unscheduled tray + empty/error/skeleton (`9867dbaf`)
+- [x] 3.3 drag-to-reschedule writes frontmatter[dateField] to the DOCUMENT not the view (invariant 16 asserted) (`b48860a5`)
+- [x] 3.4 wire calendar → CalendarView in viewRouter (`593753d4`)
+- [x] STANDARD panel: generalist (invariant-16 trigger did NOT fire; TZ-safe; 0 Crit/0 Imp) + simplicity (Low). 
+- [x] review simplifications (`eb774762`): export bucketKey → collapse 3 byDay scans to O(1) · delete dead dayOf · remove unused buildWeekGrid (YAGNI)
+- FINAL: web 1031 / server 1915 / shared 82, 0 fail · tsc clean all 3.
+- DEFERRED: real-browser pointer-drag (jsdom can't drive it; synthetic onDragEnd only) → Playwright spec, same as kanban [backlog]. a11y: doc-chip drag aria-roledescription [later a11y pass].
+
+### Cluster 5 (timeline view) — DONE, at STANDARD REVIEW GATE (Stefan sign-off)
+- [x] 4.1 timeline-lanes pure scale/range math, TZ-safe, verified ×3 LA/Tokyo/Kiritimati (`5c652792`)
+- [x] 4.2 timeline render + zoom toggle persists settings.zoom to the VIEW (invariant 16 view-side) (`73f405a2`)
+- [x] 4.3 range-preserving drag (start+end shift same day-delta, duration preserved) writes the DOCUMENT (invariant 16 doc-side) + router wire (`6db68429`)
+- [x] STANDARD panel: generalist (BOTH invariant-16 triggers CLEAR: zoom→view, drag→document; range-preservation UTC-safe; 0 Crit/0 Imp, merge-ready) + simplicity (Low).
+- [x] review simplifications (`bcb3ba9b`): extract shared date-utils.ts (DAY_MS/isoOf/msOfIso/mondayIndex were triplicated) · drop dead test no-op · converge computeRange idiom
+- FINAL: web 1064 / server 1915 / shared 82, 0 fail · tsc clean · TZ-determinism re-verified post-extraction.
+
+### Cluster 5 — deferred (optional)
+- [ ] Generalist #2 (medium): the single-date dateField precedence (fallback→start→end) is duplicated in placeOnTimeline AND the drag onDragEnd — latent-divergence smell. A shared resolveSingleDateField(frontmatter, fields) helper would converge the rule. Not a current bug (both consistent); do if the precedence ever changes.
+- [ ] Generalist #3: todayCol could reuse columnIndexFor (exported) for the same containment logic as bar placement. Consistency nit.
+- [ ] VERIFICATION GAP (both reviewers): the real pointer-drag is never driven (jsdom synthesizes onDragEnd) — drive ONE real timeline drag through Playwright/Chrome at /shakeout before merge. Same gap as calendar + kanban.
+
+## Views REWORK (2026-06-17, Stefan screenshot-grounded) — Chunk A DONE, at REVIEW GATE
+### Chunk A — list = grouped TableView (the screenshot shape)
+- [x] A.1 GroupHeaderRow — section header (label + collapse + inline aggregates), reuses GroupAggregateHeader (`8e58c761`)
+- [x] A.2 make TableView GROUP-AWARE (Stefan-approved architecture: not a parallel renderer — zero duplication, inline-edit/relations/column-menu work in grouped view free); list→TableView; DELETE card renderer 4 files (`0696ebf4`)
+- [x] A.3 drop rowLayout picker from list config (grouped table uses columns) (`efa85ddd`)
+- [x] BROWSER feature-acceptance PASS: live grouped table (aligned TITLE/STATUS/PRIORITY cols + STATUS·todo·16 items group headers + done group status=done:100 + collapse 53→37 + page-2 guard). Matches screenshot STRUCTURE.
+- [x] STANDARD panel: generalist (0 Crit, 2 Imp = dropped regressions; flat-table SAFE, page-2 CORRECT, inv 18 OK) + simplicity (Low, well-factored).
+- [x] review fixes (`02f3a894`): I1 summary-error affordance restored (card renderer's Dutch copy from git) + test · I2 truncation note + orphan-row fold to ungrouped · S1 boolean group-value normalize (1/0) · drop dead showLabelAndCount prop. +8 tests.
+- FINAL: web 1070 / server 1915 / shared 82, 0 fail · tsc clean.
+- NOTE FOR STEFAN: structure correct; group-header AGGREGATE STYLING is compact (status=done:0) vs screenshot's prominent labeled cols (% AFGEROND 60% · GEM 96% · bar). Visual polish — decide tighten now vs Chunk B.
+
+### Chunk B — ONE unified ViewControls (board model) — DONE, at REVIEW GATE (Stefan sign-off)
+- [x] B.1 deleted dead pre-Phase-6 list-view.tsx + 3 tests (`333af2a8`)
+- [x] B.2 ListControls + shared AggregateBuilder (`6ff7a651`)
+- [x] B.6 unified ViewControls — shared FilterBar + switch(view.type) settings slot, mounted once for every view; per-view SAVED filter+settings; extracted hydration hook (`88be2bb2`). [Re-architected from per-view-controls after Stefan: "use the board's system."]
+- [x] STANDARD panel: generalist (0 Crit, nothing doubled/dropped, hydration extraction line-for-line faithful) + invariant-auditor (inv 16 CONVERGES — all 5 config writes→view, date→document; inv 18 untouched; check:invariants 0/0/0) + simplicity (Low, NOT a god-component, cleanly delegated).
+- [x] BROWSER PASS: list view = Group-by + Aggregates + Filter (board-style toolbar); changing group-by → PATCH /views/<id> settings.groupBy (the "can't change after create" FIX, live-verified); calendar view = Filter + Date-field + Today. Same FilterBar everywhere, per-view settings.
+- [x] review fixes: I2 single-owner hydration (removed TableView's redundant call) (`fac227fa`) · S2 dead sameSearchValue → one source · S3 settingString dedup · I1 (Stefan) persist filter on default views too — consistent w/ settings (`7c07b108`)
+- FINAL: web 1088 / server 1915 / shared 82, 0 fail · tsc clean · check:invariants 20/0/0.
+- DEFERRED → /shakeout: live view-switch hydration across all 5 view types (un-mocked-seam, jsdom can't prove the route mount); timeline fallbackField control (S1).

@@ -46,6 +46,7 @@ import { setLastWorkspaceSlug } from '../lib/last-workspace.ts';
 import { modKeyHint } from '../lib/platform.ts';
 import { activeTableFromPath } from '../lib/rail-nav.ts';
 import { buildRailTree } from '../lib/rail-tree.ts';
+import { resolveNewViewColumns } from '../lib/resolve-new-view-columns.ts';
 import { reorderViewIds } from '../lib/view-reorder.ts';
 
 export const Route = createFileRoute('/w/$wslug')({
@@ -226,9 +227,20 @@ function WorkspaceLayout() {
     const views = viewsByTable[activeTable?.id ?? ''] ?? [];
     const active =
       views.find((v) => v.id === activeViewId) ?? views.find((v) => v.isDefault) ?? views[0];
-    if (!active) return undefined;
-    return { visibleFields: active.visibleFields, columnOrder: active.columnOrder };
-  }, [newViewSheet, tablesByProject, viewsByTable, activeViewId]);
+    // Prefer the on-screen snapshot for the OPENED table (the bug fix): the
+    // default view's saved visibleFields is usually null, so the raw read seeded
+    // nothing → server defaulted to the 3 builtins. The snapshot carries the
+    // real on-screen column set + order. Falls back to the raw saved view when
+    // the table wasn't rendered this session.
+    return resolveNewViewColumns({
+      wslug,
+      pslug: newViewSheet.pslug,
+      tslug: newViewSheet.tslug,
+      activeView: active
+        ? { visibleFields: active.visibleFields, columnOrder: active.columnOrder }
+        : null,
+    });
+  }, [wslug, newViewSheet, tablesByProject, viewsByTable, activeViewId]);
 
   const activePslug = currentPath.match(/\/p\/([^/]+)/)?.[1];
   // The table the rail should highlight: a /t/<tslug> path → that slug; the

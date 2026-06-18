@@ -1,4 +1,6 @@
+import { rankBetween } from '@folio/shared';
 import { computeReorderPosition } from './board-reorder.ts';
+import type { CardEdge } from './closest-edge.ts';
 
 export type DropAction =
   | { kind: 'none' }
@@ -49,17 +51,69 @@ export function resolveDrop(ctx: DropCtx): DropAction {
 }
 
 /**
+ * SAME-column reorder. Mirrors dnd-kit's OWN sortable order: move the active id
+ * to the over id's index (arrayMove) and rank the dropped card BETWEEN its
+ * resulting neighbors. This makes the committed slot == the slot dnd-kit was
+ * already SHOWING via the live gap — so "the gap opened" is enough; there is no
+ * midpoint over-travel threshold to cross (the bug: cards only reordered if you
+ * dragged well PAST the neighbor). For CROSS-column drops (no shared item array)
+ * use `dropSlotPosition` with the pointer edge instead.
+ *
+ * `columnDocIds` is the column's FULL display order (active still in it).
+ */
+export function reorderSlotPosition(
+  columnDocIds: string[],
+  positionOf: (id: string) => string | null,
+  activeId: string,
+  overId: string,
+): string {
+  const from = columnDocIds.indexOf(activeId);
+  const to = columnDocIds.indexOf(overId);
+  if (from === -1 || to === -1) {
+    // Defensive: fall back to appending if either id is missing from the column.
+    const positions = columnDocIds.filter((id) => id !== activeId).map((id) => positionOf(id));
+    return computeReorderPosition(positions, positions.length);
+  }
+  // arrayMove (inlined, pure): the resolved order dnd-kit renders.
+  const moved = [...columnDocIds];
+  moved.splice(to, 0, moved.splice(from, 1)[0] as string);
+  const landedIdx = moved.indexOf(activeId);
+
+  // The OTHER cards (active removed), in moved display order, with their ranks.
+  // Delegate to computeReorderPosition so the SKIP-NULL logic lives in ONE place
+  // (board-reorder.ts) — feeding rankBetween raw null neighbors collided ranks
+  // (rankBetween(null,null)='V' tied with the first-ever rank → jump-back).
+  const otherPositions = moved.filter((id) => id !== activeId).map((id) => positionOf(id));
+  const hasRankedAnchor = otherPositions.some((p) => p != null);
+  if (hasRankedAnchor) {
+    return computeReorderPosition(otherPositions, landedIdx);
+  }
+
+  // ALL-NULL column (no card ever ranked — first manual reorder of a sorted board).
+  // There is no ranked neighbor to anchor against, so a single rank between nulls
+  // would always be 'V' and the card would sort FIRST regardless of slot. Generate
+  // a SLOT-MONOTONIC rank by chaining rankBetween from the low end `landedIdx`
+  // times: dropping later yields a strictly larger rank, so the drop slot is
+  // honored relative to the (still-unranked, sort-last) siblings.
+  let rank = rankBetween(null, null);
+  for (let i = 0; i < landedIdx; i++) rank = rankBetween(rank, null);
+  return rank;
+}
+
+/**
  * Compute the board_position for dropping the active card into a column whose
  * current cards (active card already removed) have positions `orderedPositions`,
  * at the slot occupied by `overDocId` (drop-before). A `null` overDocId appends.
  * Pure mirror of KanbanView.dropSlotPosition so the reorder ranking is testable
- * without simulating a dnd-kit pointer drag.
+ * without simulating a dnd-kit pointer drag. Used for CROSS-column drops (the
+ * edge decides before/after the over-card).
  */
 export function dropSlotPosition(
   orderedDocIds: string[],
   positionOf: (id: string) => string | null,
   activeId: string,
   overDocId: string | null,
+  closestEdge: CardEdge,
 ): string {
   const idsWithoutActive = orderedDocIds.filter((id) => id !== activeId);
   const positions = idsWithoutActive.map((id) => positionOf(id) ?? null);
@@ -70,19 +124,18 @@ export function dropSlotPosition(
   const overIdx = idsWithoutActive.indexOf(overDocId);
   if (overIdx === -1) return computeReorderPosition(positions, idsWithoutActive.length);
 
-  // DIRECTION-AWARE drop slot. computeReorderPosition inserts BEFORE targetIndex.
-  // - Dragging a card UP (its original index is AFTER the over-card): "drop on
-  //   the over-card" means land ABOVE it → targetIndex = overIdx (drop-before). ✓
-  // - Dragging a card DOWN (its original index is BEFORE the over-card): "drop on
-  //   the over-card" means land BELOW it → targetIndex = overIdx + 1 (drop-AFTER).
-  // Without the +1, a down-by-one drop computes a rank before the over-card —
-  // i.e. the slot the card already occupied — so it never moves (it "only works
-  // if you move 2+ positions"). The active card's ORIGINAL index decides
-  // direction, so read it from orderedDocIds (before the active was filtered).
-  const activeOrigIdx = orderedDocIds.indexOf(activeId);
-  const overOrigIdx = orderedDocIds.indexOf(overDocId);
-  const movingDown = activeOrigIdx !== -1 && overOrigIdx !== -1 && activeOrigIdx < overOrigIdx;
-  const targetIndex = movingDown ? overIdx + 1 : overIdx;
+  // EDGE-AWARE drop slot (the "lands second" fix). computeReorderPosition inserts
+  // BEFORE targetIndex into the active-REMOVED array, so `overIdx` is already the
+  // over-card's post-removal position. The drop side comes from where the dragged
+  // card's CENTER is relative to the over-card MIDPOINT (closestEdge), not from
+  // an array-index direction guess:
+  //   - edge 'top'    → land BEFORE the over-card → targetIndex = overIdx
+  //   - edge 'bottom' → land AFTER  the over-card → targetIndex = overIdx + 1
+  // The bottom half of the LAST card yields overIdx+1 === length → a true append
+  // (the old index heuristic mis-fired here → the card "landed second"). This is
+  // uniform for same-column and cross-column because overIdx is always measured
+  // in the active-removed array.
+  const targetIndex = closestEdge === 'bottom' ? overIdx + 1 : overIdx;
   return computeReorderPosition(positions, targetIndex);
 }
 

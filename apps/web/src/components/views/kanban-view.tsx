@@ -1,11 +1,15 @@
 import {
+  type CollisionDetection,
   DndContext,
   type DragEndEvent,
+  type DragMoveEvent,
+  type DragOverEvent,
   DragOverlay,
   type DragStartEvent,
   MeasuringStrategy,
   PointerSensor,
   closestCorners,
+  pointerWithin,
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
@@ -14,6 +18,8 @@ import { useMemo, useState, useSyncExternalStore } from 'react';
 import { toast } from 'sonner';
 import {
   type DocumentSummary,
+  clausesToListParams,
+  parseFilters,
   useCreateDocument,
   useDocuments,
   useUpdateDocument,
@@ -23,8 +29,14 @@ import { formatApiError } from '../../lib/api/index.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
 import { useUpdateView, useViews } from '../../lib/api/views.ts';
 import { type BoardSort, boardControlsBus } from '../../lib/board-controls-bus.ts';
-import { coerceGroupValue, dropSlotPosition, resolveDrop } from '../kanban/board-drag.ts';
+import {
+  coerceGroupValue,
+  dropSlotPosition,
+  reorderSlotPosition,
+  resolveDrop,
+} from '../kanban/board-drag.ts';
 import { buildColumns } from '../kanban/board-grouping.ts';
+import { type CardEdge, getClosestEdge } from '../kanban/closest-edge.ts';
 import { KanbanCard } from '../kanban/kanban-card.tsx';
 import { KanbanColumn } from '../kanban/kanban-column.tsx';
 import { EmptyState } from './empty-state.tsx';
@@ -49,6 +61,49 @@ interface Props {
 // live DOM frame-sampling 2026-06-08: the 180ms fade was the duplicate-card
 // window.)
 
+// Quarantines the dnd-kit-6.3.1 event shape. The robust drop-side signal is the
+// live POINTER Y vs the over-card midpoint (the Atlassian/rbd rule) — NOT the
+// dragged card's own rect. Within a column, verticalListSortingStrategy shifts
+// the siblings to make room, so the dragged card's translated center sits ~on
+// the over-card midpoint and the edge resolves to the card's OWN slot → the drop
+// is a no-op (the "lifts, drags, snaps back" regression). dnd-kit gives no
+// pointer field, but the pointer Y is reconstructable: activatorEvent (the
+// pointerdown clientY) + delta.y (cumulative movement). Falls back to the
+// dragged-rect center, then 'bottom', when neither is available (synthetic/jsdom
+// drags) so callers never crash. Shared by onDragEnd + onDragOver.
+// Collision detection: pointerWithin FIRST, then closestCorners. `pointerWithin`
+// reports a droppable when the pointer is literally INSIDE its rect — which makes
+// an EMPTY column (a large whitespace droppable with no cards) easy to hit: hover
+// anywhere in it and it registers. `closestCorners` alone favored the nearest
+// CARD by corner distance, so an empty column lost to cards in adjacent columns
+// and was hard to drop into. Fall back to closestCorners when the pointer is in a
+// gutter (inside no droppable) so dragging between columns still resolves a target.
+const boardCollisionDetection: CollisionDetection = (args) => {
+  const within = pointerWithin(args);
+  return within.length > 0 ? within : closestCorners(args);
+};
+
+function dropEdgeFromEvent(event: DragMoveEvent | DragEndEvent): CardEdge {
+  const overRect = event.over?.rect;
+  if (!overRect) return 'bottom';
+  const pointerY = pointerYFromEvent(event);
+  if (pointerY !== null) return getClosestEdge(pointerY, overRect);
+  // Fallback: dragged-card center (less reliable within a column — see above).
+  const activeRect = event.active?.rect?.current?.translated;
+  if (!activeRect) return 'bottom';
+  return getClosestEdge(activeRect.top + activeRect.height / 2, overRect);
+}
+
+// Live pointer Y = the pointerdown clientY (activatorEvent) + cumulative drag
+// delta. Returns null when the activator has no clientY (keyboard drag, or a
+// synthetic test event) so the caller can fall back.
+function pointerYFromEvent(event: DragMoveEvent | DragEndEvent): number | null {
+  const activator = event.activatorEvent as { clientY?: number } | null | undefined;
+  const startY = activator?.clientY;
+  if (typeof startY !== 'number') return null;
+  return startY + (event.delta?.y ?? 0);
+}
+
 export function KanbanView({ wslug, pslug, tslug }: Props) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
@@ -61,6 +116,21 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
   // portals above everything so the dragged card isn't clipped by a column's
   // overflow). Set on drag start, cleared on end/cancel.
   const [activeId, setActiveId] = useState<string | null>(null);
+  // Live drop-indicator: which card the dragged card is over, and on which edge
+  // the insertion LINE should render. STATE ONLY — we never move cards between
+  // column arrays during the drag (the "line school", not the move-items school:
+  // no re-render storms / oscillation, and the line's (prev,next) pair is exactly
+  // what rankBetween needs at drop). Cleared on drag end + cancel.
+  // The doc id that JUST landed from a drop — drives a one-shot settle animation
+  // (scale+fade-in) on the real card as it appears in its slot. We animate the
+  // REAL card, NOT the DragOverlay clone: a fading overlay would double up over
+  // the optimistically-placed card (the documented duplicate-card flicker, see
+  // dropAnimation={null} above). Cleared by the card's own onAnimationEnd (no
+  // timer to leak).
+  const [justLandedId, setJustLandedId] = useState<string | null>(null);
+  const [dropIndicator, setDropIndicator] = useState<{ overId: string; edge: CardEdge } | null>(
+    null,
+  );
 
   const urlViewId = typeof search.view === 'string' ? search.view : undefined;
   const activeView = useMemo(() => {
@@ -96,10 +166,17 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     return { key: k, dir: d === 'desc' ? 'desc' : 'asc' };
   }, [activeView, override]);
 
+  // The shared FilterBar PATCHes the URL search; parse it so the board narrows
+  // by the active filter. The clause params MERGE into the sort-based params —
+  // spread FIRST, then the board's own type/sort/dir/limit override (sort/dir
+  // are the board's concern, not the filter's, so they must win).
+  const clauses = useMemo(() => parseFilters(search), [search]);
+
   const listParams = useMemo(
     () =>
       effectiveSort
         ? {
+            ...clausesToListParams(clauses),
             type: 'work_item' as const,
             sort: effectiveSort.key,
             dir: effectiveSort.dir,
@@ -109,8 +186,14 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
           // coalesces a null board_position to a high sentinel, so unranked cards
           // (never dragged) sort LAST — deterministic and stable. The first drag
           // assigns a rank via rankBetween, lifting the card out of the unranked tail.
-          { type: 'work_item' as const, sort: 'board_position', dir: 'asc' as const, limit: 200 },
-    [effectiveSort],
+          {
+            ...clausesToListParams(clauses),
+            type: 'work_item' as const,
+            sort: 'board_position',
+            dir: 'asc' as const,
+            limit: 200,
+          },
+    [effectiveSort, clauses],
   );
 
   const { data: page, isLoading, error } = useDocuments(wslug, pslug, tslug, listParams);
@@ -200,29 +283,67 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
       : { frontmatter: { [groupBy]: coerceGroupValue(colValue, groupField?.type) } };
 
   // Computes the board_position for dropping the active card into `col` at the
-  // slot occupied by `overDocId` (drop-before). `null` overDocId appends.
+  // slot occupied by `overDocId`. The `closestEdge` (dragged-card center vs the
+  // over-card midpoint) decides before/after — the "lands second" fix. `null`
+  // overDocId appends (edge irrelevant).
   const slotPosition = (
     col: { docIds: string[] },
     activeId: string,
     overDocId: string | null,
+    closestEdge: CardEdge,
   ): string =>
     dropSlotPosition(
       col.docIds,
       (id) => docsById.get(id)?.boardPosition ?? null,
       activeId,
       overDocId,
+      closestEdge,
+    );
+
+  // SAME-column reorder: mirror dnd-kit's own sortable order (arrayMove) so the
+  // committed slot == the one dnd-kit was showing via the gap — no midpoint
+  // over-travel. Uses the FULL column order (active still in it).
+  const reorderPosition = (col: { docIds: string[] }, activeId: string, overId: string): string =>
+    reorderSlotPosition(
+      col.docIds,
+      (id) => docsById.get(id)?.boardPosition ?? null,
+      activeId,
+      overId,
     );
 
   const onDragStart = (event: DragStartEvent) => {
     setActiveId(String(event.active.id));
   };
 
+  // Live insertion feedback. Sets indicator STATE only — NEVER mutates a column
+  // array. Over a card → a line on the nearest edge; over a column droppable
+  // (empty/whitespace) → no line (the column's own isOver highlight handles it).
+  // Classify column-vs-card by the droppable's OWN data (`columnValue` is set
+  // only on column droppables, kanban-column.tsx) rather than an `id` string
+  // prefix — no shared magic prefix to drift. (onDragEnd still parses the value
+  // out of the `col-` id, which it needs; this is the read-only classification.)
+  const onDragOver = (event: DragOverEvent) => {
+    const { over } = event;
+    const overIsColumn = over?.data.current?.columnValue !== undefined;
+    // No line over a column droppable, AND no line on the dragged card's OWN slot
+    // (its invisible in-place node still reports as `over` at drag start) — mirrors
+    // onDragEnd's `activeId === overId` no-op so the line never points at where the
+    // card already is (ultrareview bug_008).
+    if (!over || overIsColumn || String(over.id) === String(event.active.id)) {
+      setDropIndicator(null);
+      return;
+    }
+    setDropIndicator({ overId: String(over.id), edge: dropEdgeFromEvent(event) });
+  };
+
   const onDragCancel = () => {
     setActiveId(null);
+    setDropIndicator(null);
   };
 
   const onDragEnd = async (event: DragEndEvent) => {
     setActiveId(null);
+    setDropIndicator(null);
     const { active, over } = event;
     if (!over) return;
     const overId = String(over.id);
@@ -252,9 +373,12 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
     if ((action.kind === 'reorder' || action.kind === 'auto-manual-reorder') && activeId === overId)
       return;
 
+    // Cross-column drop side from the pointer vs the over-card midpoint.
+    const dropEdge = dropEdgeFromEvent(event);
     let patch: Record<string, unknown>;
     if (action.kind === 'reorder') {
-      patch = { boardPosition: slotPosition(destCol, activeId, overId) };
+      // SAME-column: trust dnd-kit's own sortable order (no midpoint over-travel).
+      patch = { boardPosition: reorderPosition(destCol, activeId, overId) };
     } else if (action.kind === 'auto-manual-reorder') {
       // Sorted mode + same-column card drop = hand-reorder intent. Flip the view
       // to Manual (live bus + persisted `sort: []`) so board_position becomes the
@@ -263,7 +387,8 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
       // board re-queries by board_position; the toolbar Sort label reads the same
       // bus override, so it updates to "Manual" automatically.
       persistManualSort();
-      patch = { boardPosition: slotPosition(destCol, activeId, overId) };
+      // Same-column reorder (just promoted from sorted mode) — dnd-kit order.
+      patch = { boardPosition: reorderPosition(destCol, activeId, overId) };
     } else if (action.kind === 'regroup') {
       patch = groupingPatch(destColumnValue);
     } else {
@@ -271,10 +396,13 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
       const overDocId = overIsColumn ? null : overId;
       patch = {
         ...groupingPatch(destColumnValue),
-        boardPosition: slotPosition(destCol, activeId, overDocId),
+        boardPosition: slotPosition(destCol, activeId, overDocId, dropEdge),
       };
     }
 
+    // Mark the dropped card so it plays the one-shot settle animation as the
+    // optimistic re-sort places it in its slot.
+    setJustLandedId(activeId);
     setPendingSlugs((p) => new Set(p).add(slug));
     try {
       await update.mutateAsync({ slug, patch });
@@ -305,12 +433,13 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
   return (
     <DndContext
       sensors={sensors}
-      // closestCorners returns the nearest droppable by corner distance: a CARD
-      // when the pointer is over a card (→ within-column reorder registers as
-      // reorder, not the column), the COLUMN when over its whitespace (→ empty-
-      // column regroup still wins). The default rectIntersection favored the big
-      // column droppable, so card-over-card drops reported col-* and no-op'd.
-      collisionDetection={closestCorners}
+      // pointerWithin-first, then closestCorners (boardCollisionDetection above):
+      // pointerWithin makes an EMPTY column easy to hit (hover anywhere inside its
+      // body → it registers), which closestCorners-alone made hard (it favored the
+      // nearest CARD by corner distance, so empty columns lost to adjacent cards).
+      // closestCorners is the fallback for gutter drags + still reports the
+      // over-CARD for reorder when the pointer is inside a card.
+      collisionDetection={boardCollisionDetection}
       // Re-measure droppables on EVERY render during a drag (not just at drag
       // start). After a cross-column move, the just-moved card's optimistic
       // re-render changes the DOM, but dnd-kit caches rects at drag-start — so
@@ -320,6 +449,7 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
       // so the moved card is immediately reorderable.
       measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
       onDragStart={onDragStart}
+      onDragOver={onDragOver}
       onDragEnd={onDragEnd}
       onDragCancel={onDragCancel}
     >
@@ -336,6 +466,11 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
               onAdd={col.value === null ? undefined : () => onCreateInColumn(col.value)}
               isAddPending={create.isPending}
               docIds={col.docIds}
+              // Live drop-line for THIS column: the column renders it as a flex
+              // sibling between cards (stable; doesn't follow the sliding cards).
+              indicator={
+                dropIndicator && col.docIds.includes(dropIndicator.overId) ? dropIndicator : null
+              }
               // Always wrap in a SortableContext so a card-over-card drop reports
               // the over-CARD even in sorted mode (lets onDragEnd resolve the slot
               // for the auto-switch-to-Manual reorder). The PERSIST gate is
@@ -347,10 +482,21 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
                 if (!doc) return null;
                 return (
                   <KanbanCard
-                    key={doc.id}
+                    // Key includes the column value so a CROSS-COLUMN move
+                    // REMOUNTS the card. dnd-kit caches the draggable rect by
+                    // element identity (useInitialRect, memoized on the node);
+                    // reusing the element across columns kept the OLD-column rect
+                    // → "the just-moved card can't be repositioned until I drag
+                    // another card first" (Bug 3). Remounting busts that cache.
+                    // (MeasuringStrategy.Always covers DROPPABLES only, not this.)
+                    key={`${doc.id}:${col.value ?? '__unset__'}`}
                     doc={doc}
                     onOpen={openDoc}
                     isPending={pendingSlugs.has(doc.slug)}
+                    // One-shot settle animation as the dropped card lands; the
+                    // card clears the marker via onAnimationEnd (no timer).
+                    justLanded={justLandedId === doc.id}
+                    onSettled={() => setJustLandedId(null)}
                     // Always sortable (both modes) so over.id is a card on a
                     // card-over-card drop — see KanbanColumn `sortable` note.
                     sortable

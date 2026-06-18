@@ -1,6 +1,9 @@
-import { render } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { QueryClient } from '@tanstack/react-query';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DocumentSummary } from '../../lib/api/documents.ts';
+import { stubFetch, wrap } from '../assignee/test-fixtures.tsx';
 import type { Column } from './columns.ts';
 import { TableCell } from './table-cell.tsx';
 
@@ -40,6 +43,8 @@ describe('TableCell urgency', () => {
         column={column}
         doc={doc}
         statuses={[]}
+        wslug="acme"
+        pslug="web"
         isPending={false}
         onOpen={noop}
         onTitleCommit={noop}
@@ -54,10 +59,11 @@ describe('TableCell urgency', () => {
     expect(hasDanger).toBe(true);
   });
 
-  it('isSticky=true wraps the cell in a sticky container with a right border', () => {
+  it('isSticky=true wraps the cell in a sticky container (no border-r — col 1 owns the boundary)', () => {
     // The first column gets sticky positioning when the table scrolls
-    // horizontally. To make the boundary between sticky and scrolling
-    // columns visible, the sticky wrapper carries `border-r border-border-light`.
+    // horizontally. It does NOT paint `border-r` — col 1's `border-l` owns the
+    // boundary line; a sticky border-r would double it (~2px) at that one
+    // boundary (ultrareview bug_007).
     const column: Column = {
       key: 'title',
       label: 'Title',
@@ -71,6 +77,8 @@ describe('TableCell urgency', () => {
         column={column}
         doc={doc}
         statuses={[]}
+        wslug="acme"
+        pslug="web"
         isPending={false}
         isSticky={true}
         onOpen={noop}
@@ -85,8 +93,8 @@ describe('TableCell urgency', () => {
     const cls = wrapper!.getAttribute('class') ?? '';
     expect(cls).toContain('sticky');
     expect(cls).toContain('left-0');
-    expect(cls).toContain('border-r');
-    expect(cls).toContain('border-border-light');
+    // No border-r: the boundary line is owned by col 1's border-l (no doubling).
+    expect(cls).not.toContain('border-r');
     // The sticky cell owns the 22px left whitespace so it stays pinned from
     // the first pixel of horizontal scroll. Without this, the row's left
     // gutter scrolls with the rest until the cell's left edge hits left:0.
@@ -107,6 +115,8 @@ describe('TableCell urgency', () => {
         column={column}
         doc={doc}
         statuses={[]}
+        wslug="acme"
+        pslug="web"
         isPending={false}
         isSticky={false}
         onOpen={noop}
@@ -140,6 +150,8 @@ describe('TableCell urgency', () => {
         column={column}
         doc={doc}
         statuses={[]}
+        wslug="acme"
+        pslug="web"
         isPending={false}
         onOpen={noop}
         onTitleCommit={noop}
@@ -174,6 +186,8 @@ describe('TableCell urgency', () => {
         column={column}
         doc={doc}
         statuses={[]}
+        wslug="acme"
+        pslug="web"
         isPending={false}
         onOpen={noop}
         onTitleCommit={noop}
@@ -183,5 +197,48 @@ describe('TableCell urgency', () => {
     );
     expect(container.querySelector('.text-danger')).toBeNull();
     expect(container.querySelector('.text-warning')).toBeNull();
+  });
+});
+
+describe('TableCell assignee column', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const assigneeColumn: Column = {
+    key: 'assignee',
+    label: 'Assignee',
+    source: 'field',
+    fieldType: 'user_ref',
+    fieldOptions: null,
+  };
+
+  it('renders the AssigneePicker (not a plain text input) and commits via onFieldCommit', async () => {
+    stubFetch();
+    const onFieldCommit = vi.fn();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <TableCell
+        column={assigneeColumn}
+        doc={makeDoc({ assignee: '' })}
+        statuses={[]}
+        wslug="acme"
+        pslug="web"
+        isPending={false}
+        onOpen={noop}
+        onTitleCommit={noop}
+        onStatusCommit={noop}
+        onFieldCommit={onFieldCommit}
+      />,
+      { wrapper: wrap(qc) },
+    );
+
+    // The picker trigger — NOT a plain InlineEdit textbox for the assignee value.
+    const trigger = await screen.findByRole('button', { name: /unassigned/i });
+    expect(screen.queryByRole('textbox')).toBeNull();
+
+    await userEvent.click(trigger);
+    await userEvent.click(await screen.findByRole('button', { name: /Alice alice@test/i }));
+    expect(onFieldCommit).toHaveBeenCalledWith('x', 'assignee', 'alice@test');
   });
 });

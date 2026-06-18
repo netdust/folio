@@ -10,7 +10,8 @@ import {
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { TableView, sameSearchValue } from './table-view.tsx';
+import { sameSearchValue } from '../views/use-view-filter-hydration.ts';
+import { TableView, bucketValue } from './table-view.tsx';
 
 // Import the same Zod schema the production work-items route uses so the
 // test harness's strip/accept behavior tracks production exactly.
@@ -101,6 +102,38 @@ describe('sameSearchValue', () => {
   it('rejects array-vs-scalar mismatch', () => {
     expect(sameSearchValue(['todo'], 'todo')).toBe(false);
     expect(sameSearchValue('todo', ['todo'])).toBe(false);
+  });
+});
+
+describe('bucketValue', () => {
+  const doc = (frontmatter: Record<string, unknown>, status: string | null = 'x') =>
+    ({
+      id: 'd',
+      slug: 'd',
+      type: 'work_item' as const,
+      title: 'd',
+      status,
+      parentId: null,
+      frontmatter,
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    }) as Parameters<typeof bucketValue>[0];
+
+  it('normalizes a boolean groupBy value to the server json_extract representation (1/0)', () => {
+    // S1: the server groups a BOOLEAN frontmatter field via json_extract, which
+    // yields 1/0 → the summary group value is "1"/"0". The client reads the JS
+    // boolean `true`; `String(true)` = "true" MISMATCHES "1", so those rows land
+    // in no section. Normalize to '1'/'0' so the bucket matches the endpoint.
+    expect(bucketValue(doc({ done: true }), 'done')).toBe('1');
+    expect(bucketValue(doc({ done: false }), 'done')).toBe('0');
+  });
+
+  it('still stringifies string/number group values and nulls empty/missing', () => {
+    expect(bucketValue(doc({ amount: 1250 }), 'amount')).toBe('1250');
+    expect(bucketValue(doc({ org: 'VAD' }), 'org')).toBe('VAD');
+    expect(bucketValue(doc({}, 'todo'), 'status')).toBe('todo');
+    expect(bucketValue(doc({ org: '' }), 'org')).toBeNull();
+    expect(bucketValue(doc({}), 'missing')).toBeNull();
   });
 });
 
@@ -239,272 +272,18 @@ describe('TableView', () => {
     expect(parsed.dir).toBe('asc');
   });
 
-  it('hydrates a view-saved sort key that is NOT in the URL validator enum', async () => {
-    // Saved views can store sort by any column key (incl. custom field keys
-    // like 'next_action_due'). The work-items route enum used to strip them
-    // silently. Widening the validator to z.string() lets hydration apply
-    // the view's sort intent unchanged.
-    const customSortView = {
-      ...viewRow,
-      id: 'v-custom-sort',
-      isDefault: false,
-      filters: {},
-      sort: [{ key: 'next_action_due', dir: 'asc' }],
-    };
-    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
-      const u = String(url);
-      const method = init?.method ?? 'GET';
-      if (u.includes('/statuses') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/fields') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/views') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [customSortView] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/documents') && method === 'GET') {
-        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
-    });
-    vi.stubGlobal('fetch', fetchMock);
+  // I2 MOVED: TableView is no longer a hydration owner — ViewControls (mounted
+  // once in the project header) is the SOLE owner of filter/sort hydration. The
+  // self-hydration assertions that used to live here (a view-saved sort key not
+  // in the URL enum; URL-filter-wins-over-view; view-fills-URL on ?view=) now
+  // live un-weakened in use-view-filter-hydration.test.ts, which exercises the
+  // single hydration source directly.
 
-    const { queryClient, router } = setup('/w/acme/p/web/work-items?view=v-custom-sort');
-    render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>,
-    );
-
-    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
-
-    await waitFor(() => {
-      const s = router.state.location.search as Record<string, unknown>;
-      expect(s.sort).toBe('next_action_due');
-      expect(s.dir).toBe('asc');
-    });
-  });
-
-  it('preserves user-supplied URL filter params over the view-stored value on first hydration', async () => {
-    // Stored view filters status to "In Progress". User arrives with
-    // ?view=v-triage&status=todo — that explicit URL filter must win.
-    const triageView = {
-      ...viewRow,
-      id: 'v-triage',
-      isDefault: false,
-      filters: { status: { $eq: 'In Progress' } },
-    };
-    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
-      const u = String(url);
-      const method = init?.method ?? 'GET';
-      if (u.includes('/statuses') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/fields') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/views') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [triageView] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/documents') && method === 'GET') {
-        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    const { queryClient, router } = setup('/w/acme/p/web/work-items?view=v-triage&status=todo');
-    render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>,
-    );
-
-    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
-
-    await waitFor(() => {
-      const s = router.state.location.search as Record<string, unknown>;
-      expect(s.view).toBe('v-triage');
-      // URL's explicit status=todo wins over view's stored "In Progress".
-      expect(s.status).toBe('todo');
-    });
-  });
-
-  it('hydrates URL filters from the active view when ?view= matches a non-default view', async () => {
-    const defaultView = {
-      ...viewRow,
-      id: 'v-default',
-      slug: 'all',
-      name: 'All',
-      isDefault: true,
-      filters: {},
-    };
-    const triageView = {
-      ...viewRow,
-      id: 'v-triage',
-      slug: 'triage',
-      name: 'Triage',
-      isDefault: false,
-      filters: { status: { $eq: 'In Progress' } },
-    };
-
-    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
-      const u = String(url);
-      const method = init?.method ?? 'GET';
-      if (u.includes('/statuses') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/fields') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/views') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [defaultView, triageView] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/documents') && method === 'GET') {
-        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    const { queryClient, router } = setup('/w/acme/p/web/work-items?view=v-triage');
-    render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>,
-    );
-
-    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
-
-    await waitFor(() => {
-      const s = router.state.location.search as Record<string, unknown>;
-      expect(s.view).toBe('v-triage');
-      expect(s.status).toBe('In Progress');
-    });
-  });
-
-  it('does NOT auto-save filter changes to the default view when no ?view= is in the URL', async () => {
-    // Default view carries a saved status filter. Hydration will fill ?status=todo
-    // into the URL on first paint. User removes the chip → onClauseChange fires
-    // with no urlViewId. Expected: the default view is NOT mutated.
-    const defaultView = {
-      ...viewRow,
-      id: 'v-default',
-      slug: 'all',
-      name: 'All',
-      isDefault: true,
-      filters: { status: 'todo' },
-    };
-
-    const updateViewCalls: Array<{ id: string; patch: Record<string, unknown> }> = [];
-
-    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
-      const u = String(url);
-      const method = init?.method ?? 'GET';
-      if (u.includes('/statuses') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [statusRow] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/fields') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [fieldRow] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/views') && method === 'GET') {
-        return new Response(JSON.stringify({ data: [defaultView] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.match(/\/views\/v-default/) && method === 'PATCH') {
-        const body = await (init?.body instanceof ReadableStream
-          ? new Response(init.body).text()
-          : Promise.resolve(String(init?.body ?? '{}')));
-        updateViewCalls.push({ id: 'v-default', patch: JSON.parse(body) });
-        return new Response(JSON.stringify(defaultView), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/documents') && method === 'GET') {
-        return new Response(JSON.stringify({ data: { data: [docRow], nextCursor: null } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    // No ?view= in URL: user has not explicitly opened the default view.
-    const { queryClient, router } = setup('/w/acme/p/web/work-items');
-    render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>,
-    );
-
-    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
-
-    // Hydration populates the chip from the default view's saved filter.
-    const removeBtn = await screen.findByRole('button', { name: /Remove status filter/i });
-    await act(async () => {
-      fireEvent.click(removeBtn);
-    });
-
-    // onClauseChange always navigates (dropping the status param) BEFORE the
-    // guarded autosave decision. Awaiting the router reflecting that navigation
-    // is the deterministic post-condition that the whole handler — including the
-    // (suppressed) autosave branch — has run; then assert no PATCH fired.
-    await waitFor(() => expect(router.state.location.search).not.toHaveProperty('status'));
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: /Remove status filter/i })).toBeNull(),
-    );
-
-    // No ?view= → activeView is the default view by fallback. User removing
-    // a chip is an ad-hoc filter change; it must NOT mutate the default view.
-    expect(updateViewCalls).toEqual([]);
-  });
+  // B.6 MOVED: the FilterBar + its onClauseChange autosave moved to the unified
+  // ViewControls (project header). The "filter change does NOT autosave without
+  // ?view=" contract now lives — un-weakened — in view-controls.test.tsx
+  // ("does NOT autosave a filter change without ?view="). TableView no longer
+  // renders the FilterBar, so the chip-removal path is not reachable from here.
 
   it('clicking a sort header does NOT patch view.sort when no ?view= is in the URL', async () => {
     const defaultView = {
@@ -1757,13 +1536,12 @@ describe('TableView', () => {
     expect(settingsBtn.closest('[data-testid="table-settings-col"]')).toBeTruthy();
   });
 
-  it('the top filter bar no longer contains the column picker', async () => {
-    setupPinnedSettings();
-    await waitFor(() => expect(screen.getByText('First task')).toBeInTheDocument());
-
-    const filterBar = screen.getByTestId('filter-bar');
-    expect(within(filterBar).queryByRole('button', { name: /columns/i })).toBeNull();
-  });
+  // B.6 MOVED: the FilterBar moved to the unified ViewControls (project header),
+  // so TableView no longer renders a `filter-bar`. The "filter bar does NOT
+  // contain the column picker" contract now lives — un-weakened — in
+  // view-controls.test.tsx ("FilterBar has no column picker"). The companion
+  // assertion (the column picker IS the pinned settings column) stays above and
+  // remains owned by TableView.
 
   it('clicking a custom field header sorts by that field', async () => {
     // FS-2: every column header is sortable, not just built-ins. The seeded
@@ -2062,6 +1840,13 @@ describe('TableView — pagination + server-side filter (M3)', () => {
       if (u.includes('/fields') && method === 'GET') return json({ data: [] });
       if (u.includes('/views') && method === 'GET') return json({ data: [viewRow] });
       if (u.includes('/tables') && method === 'GET') return json({ data: [] });
+      // viewRow is type:'list' → TableView issues a group-summary query. These
+      // M3 pagination tests exercise the FLAT row path, so return an empty
+      // summary (grouping falls back to flat) and keep it OUT of documentUrls —
+      // its URL also contains "/documents", so it MUST be matched first.
+      if (u.includes('/group-summary') && method === 'GET') {
+        return json({ data: { groups: [], ungrouped: null, truncated: false } });
+      }
       if (u.includes('/documents') && method === 'GET') {
         documentUrls.push(u);
         return json({ data: documentsHandler(new URL(u, 'http://test.local')) });
@@ -2199,3 +1984,256 @@ describe('TableView — pagination + server-side filter (M3)', () => {
     expect(page2Calls).toBe(1);
   });
 });
+
+// A.2: a `type:'list'` active view turns TableView into the GROUPED table — it
+// renders a GroupHeaderRow section per endpoint group (count from the
+// group-summary endpoint, NEVER from loaded-row counts), the group's TableRows
+// under it, the ungrouped bucket last, and collapse hides a group's rows. A
+// `type:'table'` view stays FLAT. Reuses ALL of TableView's existing wiring.
+describe('TableView grouped (list view)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const listView = {
+    ...viewRow,
+    type: 'list' as const,
+    settings: { groupBy: 'status', aggregates: [{ op: 'count' }] },
+    visibleFields: ['title', 'status', 'updated_at'],
+  };
+
+  const tableView = {
+    ...viewRow,
+    type: 'table' as const,
+    settings: {},
+    visibleFields: ['title', 'status', 'updated_at'],
+  };
+
+  const doneStatus = { ...statusRow, id: 's-done', key: 'done', name: 'Done', order: 1 };
+  const todoStatus = { ...statusRow, id: 's-todo', key: 'todo', name: 'Todo', order: 0 };
+
+  const mkDoc = (id: string, title: string, status: string | null) => ({
+    id,
+    slug: id,
+    type: 'work_item' as const,
+    title,
+    status: status as string | null,
+    parentId: null,
+    frontmatter: {},
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  });
+
+  // The group-summary endpoint is the SOURCE OF TRUTH for counts: 'done' = 148,
+  // 'todo' = 43, plus an ungrouped bucket of 5 — far more than the handful of
+  // rows actually loaded below (the page-2 guard).
+  const SUMMARY = {
+    groups: [
+      { value: 'done', count: 148, aggregates: { count: 148 } },
+      { value: 'todo', count: 43, aggregates: { count: 43 } },
+    ],
+    ungrouped: { value: null, count: 5, aggregates: { count: 5 } },
+    truncated: false,
+  };
+
+  // Only a couple of rows per group are LOADED (the endpoint reports far more).
+  const LOADED = [
+    mkDoc('d-done-1', 'Done one', 'done'),
+    mkDoc('d-done-2', 'Done two', 'done'),
+    mkDoc('d-todo-1', 'Todo one', 'todo'),
+    mkDoc('d-none-1', 'No status item', null),
+  ];
+
+  function makeGroupedFetch(view: typeof listView | typeof tableView, summary = SUMMARY) {
+    return vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+      const json = (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      if (u.includes('/statuses') && method === 'GET')
+        return json({ data: [todoStatus, doneStatus] });
+      if (u.includes('/fields') && method === 'GET') return json({ data: [] });
+      if (u.includes('/views') && method === 'GET') return json({ data: [view] });
+      if (u.includes('/tables') && method === 'GET') return json({ data: [] });
+      // group-summary BEFORE the generic /documents branch (its URL also
+      // contains "/documents").
+      if (u.includes('/group-summary') && method === 'GET') return json({ data: summary });
+      if (u.includes('/documents') && method === 'GET')
+        return json({ data: { data: LOADED, nextCursor: null } });
+      return json({});
+    });
+  }
+
+  it('renders a GroupHeaderRow per endpoint group with the FULL-SET count, not the loaded count', async () => {
+    vi.stubGlobal('fetch', makeGroupedFetch(listView));
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    // One header per group, keyed by the endpoint value.
+    const doneHeader = await screen.findByTestId('group-header-row-status-done');
+    const todoHeader = await screen.findByTestId('group-header-row-status-todo');
+    expect(doneHeader).toBeInTheDocument();
+    expect(todoHeader).toBeInTheDocument();
+
+    // Page-2 guard: 'done' shows 148 (endpoint), though only 2 'done' rows loaded.
+    expect(within(doneHeader).getByText(/148 items/)).toBeInTheDocument();
+    expect(within(todoHeader).getByText(/43 items/)).toBeInTheDocument();
+  });
+
+  it("renders each group's loaded TableRows under its header", async () => {
+    vi.stubGlobal('fetch', makeGroupedFetch(listView));
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Done one')).toBeInTheDocument());
+    expect(screen.getByText('Done two')).toBeInTheDocument();
+    expect(screen.getByText('Todo one')).toBeInTheDocument();
+  });
+
+  it('renders the ungrouped bucket LAST', async () => {
+    vi.stubGlobal('fetch', makeGroupedFetch(listView));
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    const ungrouped = await screen.findByTestId('group-header-row-status-__nogroup__');
+    expect(ungrouped).toBeInTheDocument();
+    expect(screen.getByText('No status item')).toBeInTheDocument();
+
+    // The ungrouped header is the LAST group header in document order.
+    const headers = screen.getAllByTestId(/^group-header-row-status-/);
+    expect(headers[headers.length - 1]).toBe(ungrouped);
+  });
+
+  it('collapsing a group hides its rows but keeps the header (and its count)', async () => {
+    vi.stubGlobal('fetch', makeGroupedFetch(listView));
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    const doneHeader = await screen.findByTestId('group-header-row-status-done');
+    expect(screen.getByText('Done one')).toBeInTheDocument();
+
+    const chevron = within(doneHeader).getByRole('button', { name: /collapse group/i });
+    await act(async () => {
+      fireEvent.click(chevron);
+    });
+
+    // Rows gone, header + count still present.
+    await waitFor(() => expect(screen.queryByText('Done one')).toBeNull());
+    expect(screen.queryByText('Done two')).toBeNull();
+    expect(screen.getByTestId('group-header-row-status-done')).toBeInTheDocument();
+    expect(within(doneHeader).getByText(/148 items/)).toBeInTheDocument();
+    // Other groups' rows are unaffected.
+    expect(screen.getByText('Todo one')).toBeInTheDocument();
+  });
+
+  it('a type:table view renders FLAT — no group headers (regression guard)', async () => {
+    vi.stubGlobal('fetch', makeGroupedFetch(tableView));
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Done one')).toBeInTheDocument());
+    // Flat: rows render, but NO group section headers exist.
+    expect(screen.queryByTestId(/^group-header-row-/)).toBeNull();
+  });
+
+  // FIX I1 (named-acceptance REGRESSION): when the group-summary endpoint FAILS
+  // on a list view, the user must get an ERROR AFFORDANCE — not a silent degrade
+  // to a flat, ungrouped view with no signal. The rows still load and render.
+  it('surfaces a group-summary error affordance (and still renders rows) when /group-summary fails', async () => {
+    const failingFetch = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+      const json = (body: unknown, status = 200) =>
+        new Response(JSON.stringify(body), {
+          status,
+          headers: { 'content-type': 'application/json' },
+        });
+      if (u.includes('/statuses') && method === 'GET')
+        return json({ data: [todoStatus, doneStatus] });
+      if (u.includes('/fields') && method === 'GET') return json({ data: [] });
+      if (u.includes('/views') && method === 'GET') return json({ data: [listView] });
+      if (u.includes('/tables') && method === 'GET') return json({ data: [] });
+      // The group-summary read 500s — the failure I1 must surface.
+      if (u.includes('/group-summary') && method === 'GET')
+        return json({ error: { code: 'internal', message: 'boom' } }, 500);
+      if (u.includes('/documents') && method === 'GET')
+        return json({ data: { data: LOADED, nextCursor: null } });
+      return json({});
+    });
+    vi.stubGlobal('fetch', failingFetch);
+
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    // The error affordance is present...
+    const banner = await screen.findByTestId('group-summary-error');
+    expect(banner).toBeInTheDocument();
+    // ...AND the loaded rows still render (degraded grouping, not a blank table).
+    expect(screen.getByText('Done one')).toBeInTheDocument();
+    expect(screen.getByText('Todo one')).toBeInTheDocument();
+  });
+
+  // FIX I2 (edge REGRESSION): when the endpoint caps groups it sets truncated:true;
+  // the user must see a "more groups exist" note (the old renderer's signal),
+  // not a silent drop.
+  it('renders a truncation note when the endpoint reports truncated groups', async () => {
+    const truncatedSummary = { ...SUMMARY, truncated: true };
+    vi.stubGlobal('fetch', makeGroupedFetch(listView, truncatedSummary));
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByTestId('groups-truncated')).toBeInTheDocument();
+  });
+
+  it('does NOT render the truncation note when truncated is false', async () => {
+    vi.stubGlobal('fetch', makeGroupedFetch(listView));
+    const { queryClient, router } = setup('/w/acme/p/web/work-items');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Done one')).toBeInTheDocument());
+    expect(screen.queryByTestId('groups-truncated')).toBeNull();
+  });
+});
+
+// B.6 MOVED: the grouped-list settings editor (ListControls) moved from the
+// TableView toolbar to the unified ViewControls (project header). Its mount —
+// "list view → group-by + aggregate controls present" + the negative case
+// "table view → no settings slot" — now lives, un-weakened, in
+// view-controls.test.tsx ("per-type settings slot"). TableView no longer mounts
+// ListControls, so the B.2 wiring seam is no longer reachable from here.

@@ -1,18 +1,20 @@
-import { createFileRoute } from '@tanstack/react-router';
-import { KanbanView } from '../components/views/kanban-view.tsx';
+import { createFileRoute, redirect } from '@tanstack/react-router';
 import { viewSearchSchema } from '../lib/table-search.ts';
 
-// Slug-collision precedence: a user table literally slugged `board` resolves
-// /t/board (this kanban route's SIBLING grid, via $tslug) and /t/board/board
-// (this kanban route, via $tslug/board). TanStack treats `$tslug` and
-// `$tslug/board` as distinct route ids, so both still resolve correctly — the
-// literal `board` segment here always wins over `$tslug` for the deeper path.
+// Back-compat: the legacy /t/$tslug/board URL redirects to the unified
+// /t/$tslug route on the SAME table (params — incl. the real $tslug — pass
+// straight through). View type now lives on the saved view, not the URL; a
+// user who wants a board selects a kanban view. Keeps its own
+// `viewSearchSchema` (the narrow doc+view shape it always carried), a subset of
+// the unified target's `tableSearchSchema`, so search passes through unchanged.
 export const Route = createFileRoute('/w/$wslug/p/$pslug/t/$tslug/board')({
   validateSearch: viewSearchSchema,
-  component: BoardRoute,
+  beforeLoad: ({ params, search }) => {
+    throw redirect({
+      to: '/w/$wslug/p/$pslug/t/$tslug',
+      params,
+      search,
+      replace: true,
+    });
+  },
 });
-
-function BoardRoute() {
-  const { wslug, pslug, tslug } = Route.useParams();
-  return <KanbanView wslug={wslug} pslug={pslug} tslug={tslug} />;
-}

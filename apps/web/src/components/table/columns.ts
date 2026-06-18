@@ -120,7 +120,7 @@ const FIELD_WIDTHS: Partial<Record<FieldType, number>> = {
   number: 120,
   currency: 120,
   boolean: 80,
-  date: 140,
+  date: 160,
   datetime: 160,
   select: 160,
   multi_select: 220,

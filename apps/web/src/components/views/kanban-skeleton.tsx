@@ -5,7 +5,7 @@ export function KanbanSkeleton({
   cardsPerColumn = 2,
 }: { columns?: number; cardsPerColumn?: number }) {
   return (
-    <div className="flex h-full gap-3 overflow-x-auto px-[22px] py-2" aria-busy>
+    <div className="flex h-full gap-3 overflow-x-auto" aria-busy>
       {Array.from({ length: columns }, (_, c) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: static non-reordering skeleton placeholder column, index key is stable
         <div key={c} className="flex w-[280px] shrink-0 flex-col">

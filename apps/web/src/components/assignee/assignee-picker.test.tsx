@@ -1,88 +1,19 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient } from '@tanstack/react-query';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AssigneePicker } from './assignee-picker.tsx';
+import {
+  agentsResponse,
+  memberResponse,
+  projectsResponse,
+  stubFetch,
+  wrap,
+} from './test-fixtures.tsx';
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
-
-function wrap(qc: QueryClient) {
-  return ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={qc}>{children}</QueryClientProvider>
-  );
-}
-
-function stubFetch(handlers: Record<string, () => Response>) {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async (input: RequestInfo) => {
-      const url = String(input);
-      for (const [match, build] of Object.entries(handlers)) {
-        if (url.includes(match)) return build();
-      }
-      return new Response(JSON.stringify({ data: { members: [] } }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    }),
-  );
-}
-
-const memberResponse = () =>
-  new Response(
-    JSON.stringify({
-      data: {
-        members: [
-          { id: 'u1', email: 'alice@test', name: 'Alice', role: 'owner' },
-          { id: 'u2', email: 'bob@test', name: 'Bob', role: 'member' },
-        ],
-      },
-    }),
-    { status: 200, headers: { 'content-type': 'application/json' } },
-  );
-
-// Phase 2.5: workspace-scoped agent list — single { data: [] } envelope.
-const agentsResponse = () =>
-  new Response(
-    JSON.stringify({
-      data: [
-        {
-          id: 'd1',
-          slug: 'triage-bot',
-          type: 'agent',
-          title: 'Triage Bot',
-          status: null,
-          parentId: null,
-          frontmatter: { projects: ['*'] },
-          createdAt: '2026-05-25T00:00:00.000Z',
-          updatedAt: '2026-05-25T00:00:00.000Z',
-          lastTouchedAt: null,
-        },
-      ],
-    }),
-    { status: 200, headers: { 'content-type': 'application/json' } },
-  );
-
-// useProjects(wslug) — needed so the picker can resolve pslug → project id.
-const projectsResponse = () =>
-  new Response(
-    JSON.stringify({
-      data: [
-        {
-          id: 'pid-web',
-          workspaceId: 'w1',
-          slug: 'web',
-          name: 'Web',
-          icon: null,
-          description: null,
-        },
-      ],
-    }),
-    { status: 200, headers: { 'content-type': 'application/json' } },
-  );
 
 describe('AssigneePicker', () => {
   it('renders sections for Members and Agents and lists each', async () => {
@@ -167,5 +98,25 @@ describe('AssigneePicker', () => {
     await userEvent.click(screen.getByRole('button', { name: /alice/i }));
     await userEvent.click(await screen.findByRole('button', { name: /clear assignee|unassign/i }));
     expect(onChange).toHaveBeenCalledWith('');
+  });
+
+  it('typing in the search box narrows the member list (seam over the real filter)', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    stubFetch({
+      '/documents?type=agent': agentsResponse,
+      '/projects': projectsResponse,
+      '/members': memberResponse,
+    });
+    render(<AssigneePicker wslug="acme" pslug="web" value="" onChange={() => {}} />, {
+      wrapper: wrap(qc),
+    });
+    await userEvent.click(screen.getByRole('button', { name: /unassigned/i }));
+    // Both members visible with an empty query.
+    expect(await screen.findByText('Alice')).toBeInTheDocument();
+    expect(screen.getByText('Bob')).toBeInTheDocument();
+    // Filtering to "ali" keeps Alice, drops Bob.
+    await userEvent.type(screen.getByLabelText(/filter assignees/i), 'ali');
+    expect(screen.getByText('Alice')).toBeInTheDocument();
+    expect(screen.queryByText('Bob')).not.toBeInTheDocument();
   });
 });

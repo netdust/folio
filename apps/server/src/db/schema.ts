@@ -258,6 +258,7 @@ export const fields = sqliteTable(
         'document_ref',
         'currency',
         'relation',
+        'image',
       ],
     }).notNull(),
     label: text('label'),
@@ -360,12 +361,21 @@ export const views = sqliteTable('views', {
     .notNull()
     .references(() => tables.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
-  type: text('type', { enum: ['list', 'kanban'] }).notNull(),
+  type: text('type', {
+    enum: ['table', 'list', 'kanban', 'calendar', 'timeline', 'gallery'],
+  }).notNull(),
   filters: text('filters', { mode: 'json' }).$type<unknown>().notNull().default({}),
   sort: text('sort', { mode: 'json' }).$type<unknown>().notNull().default([]),
   groupBy: text('group_by'), // field key for kanban grouping; defaults to status
   visibleFields: text('visible_fields', { mode: 'json' }).$type<string[]>().notNull().default([]),
   columnOrder: text('column_order', { mode: 'json' }).$type<string[] | null>(),
+  // Per-view typed config (e.g. { dateField } for a calendar view). Invariant 10:
+  // config of the EXISTING views entity, not a new table. Freeform JSON like
+  // `filters` — unknown keys survive intact.
+  settings: text('settings', { mode: 'json' })
+    .$type<Record<string, unknown>>()
+    .notNull()
+    .default({}),
   order: integer('order').notNull().default(0),
   isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp_ms' })
