@@ -54,14 +54,17 @@ export function TableCell({
   // field types align on the same midline regardless of their intrinsic box
   // height (the native date input is taller than a text span, which otherwise
   // made the date sit higher than its row siblings). `min-w-0` lets truncating
-  // children shrink. `border-l` draws the inter-column separator (the sticky
-  // first column owns its own `border-r` instead).
+  // children shrink. `border-l` draws the inter-column separator on EVERY
+  // non-sticky cell — including col 1, whose border-l owns the sticky↔col-1
+  // boundary line. The sticky cell therefore does NOT paint `border-r` (it would
+  // double up against col 1's border-l → a ~2px line at that one boundary while
+  // every other is 1px — ultrareview bug_007).
   if (!isSticky)
     return (
       <div className="flex min-w-0 items-center border-l border-border-light px-3">{content}</div>
     );
   return (
-    <div className="sticky left-0 z-[1] flex items-center border-r border-border-light bg-content pl-[22px] pr-3 group-hover/row:bg-card">
+    <div className="sticky left-0 z-[1] flex items-center bg-content pl-[22px] pr-3 group-hover/row:bg-card">
       {content}
     </div>
   );

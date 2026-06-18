@@ -18,10 +18,12 @@ interface ActiveViewColumns {
  * on screen. Returns undefined when there's nothing to inherit at all.
  */
 export function resolveNewViewColumns(args: {
+  wslug: string;
+  pslug: string;
   tslug: string;
   activeView: ActiveViewColumns | null;
 }): { visibleFields: string[] | null; columnOrder: string[] | null } | undefined {
-  const snapshot = getColumnSnapshot(args.tslug);
+  const snapshot = getColumnSnapshot(args.wslug, args.pslug, args.tslug);
   if (snapshot) {
     return { visibleFields: snapshot.visibleFields, columnOrder: snapshot.columnOrder };
   }

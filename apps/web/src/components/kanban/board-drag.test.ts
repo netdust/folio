@@ -143,41 +143,43 @@ describe('reorderSlotPosition (dnd-kit order)', () => {
   // unranked neighbor must SKIP it to the nearest RANKED neighbor in the moved
   // order — else rankBetween treats null as an open end and the card sorts wrong
   // ("1 card in the column, dropped card jumps over the first spot, then stuck").
-  test('drag a ranked card ABOVE a single UNRANKED card → ranks before it (lands first)', () => {
-    // Column display order: ranked 'r'(m), unranked 'u'(null). Drag r DOWN onto u
-    // (move r below u): moved = u, r. r should rank AFTER u — but u is unranked,
-    // so r ranks after the nearest ranked neighbor above (none) → still a valid
-    // rank > nothing... the key case is the INVERSE below. Here assert no throw +
-    // r gets a concrete rank.
-    const pos = reorderSlotPosition(['r', 'u'], (id) => (id === 'r' ? 'm' : null), 'r', 'u');
-    expect(typeof pos).toBe('string');
-    expect(pos.length).toBeGreaterThan(0);
+  // CRITICAL regression (ultrareview merged_bug_001): the dropped card's rank must
+  // NOT COLLIDE with an existing ranked card. rankBetween(null,null) deterministically
+  // returns 'V' (the first rank ever assigned), so ranking against null neighbors when
+  // a ranked card already holds 'V' produced a TIE → server can't order → jump-back/stuck.
+  test('ranked card dropped past a single UNRANKED card does NOT collide ranks (the jump-back)', () => {
+    // r('V') first (the very first rank), u(null) last. Drag r DOWN onto u → r must
+    // get a rank that is NOT 'V' and sorts relative to u correctly. The old code
+    // returned rankBetween(null,null)='V' === r's own rank → no-op.
+    const pos = reorderSlotPosition(['r', 'u'], (id) => (id === 'r' ? 'V' : null), 'r', 'u');
+    expect(pos).not.toBe('V'); // no collision with the existing ranked card
   });
 
   test('drag the UNRANKED card ABOVE the ranked card → it ranks BEFORE the ranked one', () => {
-    // Column: ranked 'r'(m) first, unranked 'u'(null) last (its display order).
-    // Drag u UP onto r: moved = u, r. u must rank BEFORE r(m) → pos < 'm'. The
-    // bug: the immediate "lo" neighbor of u is none and "hi" is r(m) → fine here;
-    // the real trap is when the dropped card's immediate neighbor is the OTHER
-    // unranked card — covered next.
     const pos = reorderSlotPosition(['r', 'u'], (id) => (id === 'r' ? 'm' : null), 'u', 'r');
     expect(pos < 'm').toBe(true);
   });
 
-  test('skips an UNRANKED immediate neighbor to the nearest RANKED one', () => {
-    // Display: a(ranked 'c'), u(unranked null), b(ranked 'm'). Drag a card 'x'
-    // (ranked 'a') so it lands BETWEEN u and b. Immediate lo = u (null) → must
-    // skip up to a('c'); hi = b('m'). Result must sort between c and m, NOT be
-    // computed as rankBetween(null, 'm') which would ignore a('c').
+  test('skips an UNRANKED immediate neighbor to the nearest RANKED one (sorts between them)', () => {
+    // Display a('c'), u(null), b('m'); drag x('a') onto b → lands between u and b.
+    // lo must SKIP u(null) up to a('c'); hi = b('m'). Result sorts strictly between.
     const positions: Record<string, string | null> = { a: 'c', u: null, b: 'm', x: 'a' };
-    const pos = reorderSlotPosition(
-      ['a', 'u', 'b', 'x'],
-      (id) => positions[id] ?? null,
-      'x',
-      'b', // move x onto b → moved: a, u, b, x? no — splice puts x at b's index
-    );
-    expect(typeof pos).toBe('string');
-    expect(pos.length).toBeGreaterThan(0);
+    const pos = reorderSlotPosition(['a', 'u', 'b', 'x'], (id) => positions[id] ?? null, 'x', 'b');
+    expect('c' < pos && pos < 'm').toBe(true);
+  });
+
+  // Manifestation 2: an ALL-NULL column (no card ever ranked — e.g. first manual
+  // reorder on a freshly-sorted board). Every reorderSlotPosition call returned
+  // 'V' regardless of slot → the dropped card always sorted FIRST (siblings stay
+  // null = last). The dropped card must rank to reflect its DROP SLOT among the
+  // (still-unranked) siblings: dropping LAST must rank AFTER dropping FIRST.
+  test('all-null column: dropping LAST ranks higher than dropping FIRST (slot is honored)', () => {
+    const allNull = () => null;
+    // Drop apple at the END (onto cherry): apple should sort after a front drop.
+    const last = reorderSlotPosition(['apple', 'banana', 'cherry'], allNull, 'apple', 'cherry');
+    // Drop cherry at the FRONT (onto apple).
+    const first = reorderSlotPosition(['apple', 'banana', 'cherry'], allNull, 'cherry', 'apple');
+    expect(last > first).toBe(true);
   });
 });
 

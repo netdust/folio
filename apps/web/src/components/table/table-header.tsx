@@ -133,10 +133,12 @@ function SortableHeaderCell({
   // hover.
   // Non-sticky header cells get a `border-l` + `px-3` so the header column
   // separators align with the body cells (TableCell) on flush (gap-less) grids.
-  // The sticky first column keeps its own `border-r` + 22px lead whitespace.
+  // The sticky first column does NOT paint `border-r` — col 1's `border-l` owns
+  // the boundary line; a sticky `border-r` would double it (~2px) at that one
+  // boundary (matches TableCell; ultrareview bug_007).
   const wrapperClass = `group/header relative flex items-center gap-1${
     isSticky
-      ? ' sticky left-0 z-[1] border-r border-border-light bg-content pl-[22px] pr-3'
+      ? ' sticky left-0 z-[1] bg-content pl-[22px] pr-3'
       : ' border-l border-border-light px-3'
   }`;
 

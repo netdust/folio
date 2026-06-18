@@ -77,12 +77,27 @@ export function reorderSlotPosition(
   // arrayMove (inlined, pure): the resolved order dnd-kit renders.
   const moved = [...columnDocIds];
   moved.splice(to, 0, moved.splice(from, 1)[0] as string);
-  // Rank the dropped card between its neighbors in the MOVED order.
   const landedIdx = moved.indexOf(activeId);
-  const lo = landedIdx > 0 ? (positionOf(moved[landedIdx - 1] as string) ?? null) : null;
-  const hi =
-    landedIdx < moved.length - 1 ? (positionOf(moved[landedIdx + 1] as string) ?? null) : null;
-  return rankBetween(lo, hi);
+
+  // The OTHER cards (active removed), in moved display order, with their ranks.
+  // Delegate to computeReorderPosition so the SKIP-NULL logic lives in ONE place
+  // (board-reorder.ts) — feeding rankBetween raw null neighbors collided ranks
+  // (rankBetween(null,null)='V' tied with the first-ever rank → jump-back).
+  const otherPositions = moved.filter((id) => id !== activeId).map((id) => positionOf(id));
+  const hasRankedAnchor = otherPositions.some((p) => p != null);
+  if (hasRankedAnchor) {
+    return computeReorderPosition(otherPositions, landedIdx);
+  }
+
+  // ALL-NULL column (no card ever ranked — first manual reorder of a sorted board).
+  // There is no ranked neighbor to anchor against, so a single rank between nulls
+  // would always be 'V' and the card would sort FIRST regardless of slot. Generate
+  // a SLOT-MONOTONIC rank by chaining rankBetween from the low end `landedIdx`
+  // times: dropping later yields a strictly larger rank, so the drop slot is
+  // honored relative to the (still-unranked, sort-last) siblings.
+  let rank = rankBetween(null, null);
+  for (let i = 0; i < landedIdx; i++) rank = rankBetween(rank, null);
+  return rank;
 }
 
 /**

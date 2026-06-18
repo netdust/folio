@@ -233,12 +233,14 @@ function WorkspaceLayout() {
     // real on-screen column set + order. Falls back to the raw saved view when
     // the table wasn't rendered this session.
     return resolveNewViewColumns({
+      wslug,
+      pslug: newViewSheet.pslug,
       tslug: newViewSheet.tslug,
       activeView: active
         ? { visibleFields: active.visibleFields, columnOrder: active.columnOrder }
         : null,
     });
-  }, [newViewSheet, tablesByProject, viewsByTable, activeViewId]);
+  }, [wslug, newViewSheet, tablesByProject, viewsByTable, activeViewId]);
 
   const activePslug = currentPath.match(/\/p\/([^/]+)/)?.[1];
   // The table the rail should highlight: a /t/<tslug> path → that slug; the

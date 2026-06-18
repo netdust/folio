@@ -59,10 +59,11 @@ describe('TableCell urgency', () => {
     expect(hasDanger).toBe(true);
   });
 
-  it('isSticky=true wraps the cell in a sticky container with a right border', () => {
+  it('isSticky=true wraps the cell in a sticky container (no border-r — col 1 owns the boundary)', () => {
     // The first column gets sticky positioning when the table scrolls
-    // horizontally. To make the boundary between sticky and scrolling
-    // columns visible, the sticky wrapper carries `border-r border-border-light`.
+    // horizontally. It does NOT paint `border-r` — col 1's `border-l` owns the
+    // boundary line; a sticky border-r would double it (~2px) at that one
+    // boundary (ultrareview bug_007).
     const column: Column = {
       key: 'title',
       label: 'Title',
@@ -92,8 +93,8 @@ describe('TableCell urgency', () => {
     const cls = wrapper!.getAttribute('class') ?? '';
     expect(cls).toContain('sticky');
     expect(cls).toContain('left-0');
-    expect(cls).toContain('border-r');
-    expect(cls).toContain('border-border-light');
+    // No border-r: the boundary line is owned by col 1's border-l (no doubling).
+    expect(cls).not.toContain('border-r');
     // The sticky cell owns the 22px left whitespace so it stays pinned from
     // the first pixel of horizontal scroll. Without this, the row's left
     // gutter scrolls with the rest until the cell's left edge hits left:0.

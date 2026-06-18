@@ -28,6 +28,12 @@ export function AssigneePicker({ wslug, pslug, value, onChange }: Props) {
   // `label` below intentionally reads the UNFILTERED lists so it resolves the
   // current value regardless of the query.
   const [query, setQuery] = useState('');
+  // Controlled popover so the query RESETS on close — AssigneePicker stays mounted
+  // in the cell/row across the popover's open/close cycle (Radix only unmounts the
+  // content), so without this the search box reopened pre-filtered to a stale query,
+  // hiding other members/agents (ultrareview bug_004). Mirrors AddField in
+  // frontmatter-form.tsx.
+  const [open, setOpen] = useState(false);
   const filteredMembers = filterMembers(memberList, query);
   const filteredAgents = filterAgents(agentList, query);
 
@@ -43,7 +49,13 @@ export function AssigneePicker({ wslug, pslug, value, onChange }: Props) {
   }, [value, memberList, agentList]);
 
   return (
-    <Popover>
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) setQuery('');
+      }}
+    >
       <PopoverTrigger asChild>
         {/* Render through EditableShell (the field convergence point) so the
             trigger box/hover/focus tracks the shared field look automatically

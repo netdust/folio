@@ -325,7 +325,11 @@ export function KanbanView({ wslug, pslug, tslug }: Props) {
   const onDragOver = (event: DragOverEvent) => {
     const { over } = event;
     const overIsColumn = over?.data.current?.columnValue !== undefined;
-    if (!over || overIsColumn) {
+    // No line over a column droppable, AND no line on the dragged card's OWN slot
+    // (its invisible in-place node still reports as `over` at drag start) — mirrors
+    // onDragEnd's `activeId === overId` no-op so the line never points at where the
+    // card already is (ultrareview bug_008).
+    if (!over || overIsColumn || String(over.id) === String(event.active.id)) {
       setDropIndicator(null);
       return;
     }

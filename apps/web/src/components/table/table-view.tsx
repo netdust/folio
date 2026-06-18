@@ -221,8 +221,8 @@ export function TableView({ wslug, pslug, tslug }: Props) {
   // tslug so a view created from another table's rail row reads that table's set.
   useEffect(() => {
     const keys = visibleColumns.map((c) => c.key);
-    setColumnSnapshot(tslug, { visibleFields: keys, columnOrder: keys });
-  }, [tslug, visibleColumns]);
+    setColumnSnapshot(wslug, pslug, tslug, { visibleFields: keys, columnOrder: keys });
+  }, [wslug, pslug, tslug, visibleColumns]);
 
   const openDoc = (slug: string) => {
     void navigate({ to: '.', search: { ...search, doc: slug }, replace: false });
