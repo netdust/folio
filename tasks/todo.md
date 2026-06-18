@@ -6,6 +6,19 @@ For phase-level checkboxes that survive across branches, see `docs/PHASES.md`. T
 
 ---
 
+## Cockpit redesign — deferred wiring (2026-06-18, committed `6ad5e05c`)
+
+The cockpit UI was rebuilt to a new design. These three controls are rendered to match the design but **NOT wired** — pick up later. (Source of truth is the `What's WIRED vs. COSMETIC` block atop `apps/web/src/components/agent-panel/agent-cockpit-panel.tsx`.)
+
+- [ ] **Model selector ("Operator Pro" pill)** — cosmetic. Operator model is instance-level (`operator.ts` / instance AI settings); there is no per-conversation model selector. To wire: decide whether model is per-conversation or stays instance-level, then either open a real picker or relabel the pill from the live setting.
+- [ ] **Ask / Auto toggle** — cosmetic, local state only (defaults Auto). There is no approval-mode backend; single-active-turn is server-enforced. To wire: needs an approval/confirm-before-tool mode on the run loop (the riskTier irreversible-op gate already exists per `project_cockpit-chat-execution-groundtruth` — "Ask" would surface that as a per-tool confirm in chat).
+- [ ] **History tab** — placeholder. No list-conversations endpoint exists (only `recent`, `:id`, `:id/stream`). To wire: add `GET /conversations` (session-user-scoped, paginated) + a list hook + render rows.
+- [ ] (nice-to-have) **Activity tab** currently shows the *current* thread's tool-step count, not a dedicated cross-run feed. Promote to a real activity feed if desired.
+- [ ] (decision) **Send binding** is Enter (working); footer hint says ⌘↵. Either switch the binding or change the hint.
+- [ ] (decision) Palette kept **monochrome** (Folio primary), not the mockup's purple. Revisit if a purple accent token is wanted.
+
+---
+
 ## Current branch: `harden/m3-quality`
 
 Executing M3 (audit Milestone 3 — quality & polish) per `docs/superpowers/plans/2026-06-16-m3-quality-polish.md`.
