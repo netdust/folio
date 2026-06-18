@@ -132,7 +132,7 @@ Small, security-touching change → one tight cluster, **FULL tier** (it touches
 
 ---
 
-## Open questions for the user
+## Resolved decisions (were open questions)
 
-1. **Operator-model UI when the flag is off:** hide the Claude Code option entirely, or show it and fail-loud at run time with a "set FOLIO_CLAUDE_CODE_ENABLED" message? (Recommendation: show + fail-loud — the message is the affordance, and it matches the existing field's gate-on-flag pattern.)
-2. **Default model string for cc:** `claude -p` defaults to the user's configured Claude Code model when `--model` is omitted. Folio's operator-model setting wants a `model` string. Use a sentinel like `default` (→ omit `--model`, let the CLI choose) or require the operator to type a model id? (Recommendation: allow empty/`default` → omit `--model`; `cc-executor` already omits it when `model` is empty — `cc-executor.ts:69`.)
+1. **Operator-model UI when the flag is off:** **show + fail-loud.** Always render "Claude Code" in the operator-model picker; if selected while `FOLIO_CLAUDE_CODE_ENABLED` is off, the run fails at preflight with a message naming the flag. The error is the affordance; matches the existing field's gate-on-flag pattern. → the `claude_code_disabled` message must distinguish "flag off" from "not an attended run."
+2. **Default model string for cc:** **allow empty/`default` → omit `--model`.** The operator-model `model` may be empty or the literal `default`; `ccExecute`/`cc-executor` omit `--model` when `model` is empty (`cc-executor.ts:69`), letting the local Claude Code pick its own model. Note: `operatorModelSettingSchema.model` is currently `z.string().min(1)` — a `default` sentinel satisfies that; if we want true-empty we'd relax the min, so use the `default` sentinel to avoid widening the schema.
