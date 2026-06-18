@@ -32,6 +32,7 @@ import { claimNextPlanningRun } from '../services/agent-runs.ts';
 import { createComment } from '../services/comments.ts';
 import { createConversationRun } from '../services/conversation-runs.ts';
 import { createConversation } from '../services/conversations.ts';
+import { setOperatorModelSetting } from '../services/instance-settings.ts';
 import { makeTestApp } from '../test/harness.ts';
 import type { AgentRunFrontmatter } from './agent-run-schema.ts';
 import { toolsToScopes } from './agent-schema.ts';
@@ -556,14 +557,15 @@ describe('runAgent pre-flight checks', () => {
     expect(control.called).toBe(0);
   });
 
-  test('claude-code — HARD-DISABLED: still fails at preflight even when FOLIO_CLAUDE_CODE_ENABLED is TRUE', async () => {
-    // Phase C shake-out: claude-code is hard-disabled at the runner preflight.
-    // The cc path spawns a CLI that re-enters via /mcp UNAWARE of run-derived
-    // authority, so the C3 unattended floor + the agent∩caller scope ceiling are
-    // both bypassed on that path (security gaps S-1/S-2). The env flag no longer
-    // enables execution — ANY claude-code run is refused at preflight step 0,
-    // before ccExecute can be reached. This is the decisive hard-disable proof:
-    // with the flag ON, the OLD code would proceed to ccExecute; now it must not.
+  test('claude-code — a DOCUMENT run is refused at preflight even when FOLIO_CLAUDE_CODE_ENABLED is TRUE', async () => {
+    // Task 2 contract: a document/trigger cc run is refused because it is never
+    // ATTENDED (no conversationId) — ccGateBlocks denies it at preflight step 0.
+    // The flag alone does NOT enable a document run; cc is allowed ONLY on the
+    // attended operator/conversation path (see the 'operator gate' describe block
+    // above). The cc path spawns a CLI that re-enters via /mcp without the C3
+    // unattended floor — so an unattended document run must stay refused (S-1).
+    // Decisive proof: with the flag ON, the OLD blanket deny and the NEW
+    // attended-only gate AGREE here — a document run never reaches ccExecute.
     const { db, run } = await scaffold({
       withAiKey: false,
       agentOverrides: { provider: 'claude-code' },
@@ -630,7 +632,9 @@ describe('runAgent pre-flight checks', () => {
   test('claude-code — fails with claude_code_disabled when FOLIO_CLAUDE_CODE_ENABLED is off', async () => {
     // Preflight step 0: a run naming the claude-code backend fails immediately
     // with claude_code_disabled — before any DB work, key checks, or provider
-    // calls. Unchanged behavior when the flag is off (now also true when ON).
+    // calls. With the flag OFF, ccGateBlocks denies on the flag-off branch (the
+    // attended check is moot); a document run is also denied when the flag is ON
+    // (it is never attended — see the flag-ON document test above).
     const { db, run } = await scaffold({
       withAiKey: false,
       agentOverrides: { provider: 'claude-code' },
@@ -648,6 +652,164 @@ describe('runAgent pre-flight checks', () => {
     const fm = await readRun(db, run.id);
     expect(fm.status).toBe('failed');
     expect(fm.error_reason).toBe('claude_code_disabled');
+  });
+});
+
+// ==========================================================================
+// claude-code operator gate — Task 2 (attended-only ALLOW on the conversation
+// path; the env flag + attended check are BOTH required; trigger/document runs
+// stay refused). The conversation harness mirrors the operator-cockpit tests
+// below (seedInstanceSkills + createConversation/_operator + createConversationRun
+// + activeRunId CAS), but selects claude-code as the operator model so
+// loadConversationContext stamps ctx.fm.provider === 'claude-code'.
+// ==========================================================================
+
+describe('claude-code operator gate (conversation path)', () => {
+  // Stand up an operator conversation run whose operator-model is claude-code,
+  // then run it. Returns the conversation id so the caller can read the appended
+  // thread message. Deliberately seeds NO ai_keys row — cc is keyless.
+  async function runOperatorCc(
+    db: TestDB,
+    seed: Awaited<ReturnType<typeof makeTestApp>>['seed'],
+  ): Promise<{ convId: string; runId: string }> {
+    // The operator's definitional `folio` skill must be present (loadContext
+    // hard-fails MISSING_SKILL otherwise — invariant 11).
+    await seedInstanceSkills(db);
+    await setOperatorModelSetting(db, {
+      provider: 'claude-code',
+      model: 'default',
+      aiKeyLabel: 'default',
+    });
+    const conv = await createConversation(db, {
+      createdBy: seed.user.id,
+      operatorAgentId: '_operator',
+      title: 'Untitled',
+    });
+    const runId = nanoid();
+    await createConversationRun(db, {
+      conversation: { id: conv.id, createdBy: seed.user.id },
+      runId,
+    });
+    await db.update(conversations).set({ activeRunId: runId }).where(eq(conversations.id, conv.id));
+    await runAgent({ runId });
+    return { convId: conv.id, runId };
+  }
+
+  test('attended operator + flag ON → reaches ccExecute (the CLI is spawned)', async () => {
+    const { db, seed } = await makeTestApp();
+    let spawned = false;
+    let capturedArgv: string[] = [];
+    const prev = env.FOLIO_CLAUDE_CODE_ENABLED;
+    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
+    __setCcSpawnForTest((args) => {
+      spawned = true;
+      capturedArgv = args.argv;
+      return {
+        stdoutText: async () => 'cc did the work',
+        stderrText: async () => '',
+        exited: Promise.resolve(0),
+        kill: () => {},
+      };
+    });
+    try {
+      await runOperatorCc(db, seed);
+    } finally {
+      __setCcSpawnForTest(undefined);
+      (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prev;
+    }
+    expect(spawned).toBe(true);
+    // The 'default' sentinel → no --model flag (the local Claude Code picks its own).
+    expect(capturedArgv).not.toContain('--model');
+  });
+
+  test('attended operator + flag OFF → claude_code_disabled, message names the FLAG', async () => {
+    const { db, seed } = await makeTestApp();
+    let spawned = false;
+    const prev = env.FOLIO_CLAUDE_CODE_ENABLED;
+    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = false;
+    __setCcSpawnForTest(() => {
+      spawned = true;
+      return {
+        stdoutText: async () => '',
+        stderrText: async () => '',
+        exited: Promise.resolve(0),
+        kill: () => {},
+      };
+    });
+    let convId = '';
+    try {
+      ({ convId } = await runOperatorCc(db, seed));
+    } finally {
+      __setCcSpawnForTest(undefined);
+      (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prev;
+    }
+    expect(spawned).toBe(false);
+    // The failure surfaces as a thread message on the conversation run (failRun's
+    // ConversationRunSink.fail posts ONE text message carrying the detail). The
+    // message must name the flag so the operator knows how to enable cc.
+    const msgs = await db.query.messages.findMany({ where: eq(messages.conversationId, convId) });
+    const failure = msgs.map((m) => m.body).join('\n');
+    expect(failure).toMatch(/FOLIO_CLAUDE_CODE_ENABLED/);
+  });
+
+  test('attended operator + flag ON + NO ai_keys row for cc → NOT blocked by keyRowMissing (reaches ccExecute)', async () => {
+    const { db, seed } = await makeTestApp();
+    // runOperatorCc seeds NO ai_keys row at all — cc is keyless. Without the
+    // keyless exemption, conversationPreflight's keyRowMissing clause would block.
+    let spawned = false;
+    const prev = env.FOLIO_CLAUDE_CODE_ENABLED;
+    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
+    __setCcSpawnForTest(() => {
+      spawned = true;
+      return {
+        stdoutText: async () => 'ok',
+        stderrText: async () => '',
+        exited: Promise.resolve(0),
+        kill: () => {},
+      };
+    });
+    try {
+      await runOperatorCc(db, seed);
+    } finally {
+      __setCcSpawnForTest(undefined);
+      (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prev;
+    }
+    expect(spawned).toBe(true); // keyRowMissing did NOT block cc
+  });
+});
+
+describe('claude-code S-1 guard — an unattended/trigger run is ALWAYS refused (the load-bearing denial)', () => {
+  test('document/trigger cc run, flag ON → claude_code_disabled, ccExecute never reached', async () => {
+    // The document path: a trigger-fired (unattended, no conversationId) run.
+    // This is the S-1 case — even with the flag ON it must be refused, because a
+    // trigger run re-enters Folio over MCP without the C3 unattended floor.
+    const { db, run } = await scaffold({
+      withAiKey: false,
+      agentOverrides: { provider: 'claude-code' },
+      runOverrides: { provider: 'claude-code', unattended: true },
+    });
+    let spawned = false;
+    const prev = env.FOLIO_CLAUDE_CODE_ENABLED;
+    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
+    __setCcSpawnForTest(() => {
+      spawned = true;
+      return {
+        stdoutText: async () => 'ok',
+        stderrText: async () => '',
+        exited: Promise.resolve(0),
+        kill: () => {},
+      };
+    });
+    try {
+      await runAgent({ runId: run.id });
+    } finally {
+      __setCcSpawnForTest(undefined);
+      (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prev;
+    }
+    const fm = await readRun(db, run.id);
+    expect(fm.status).toBe('failed');
+    expect(fm.error_reason).toBe('claude_code_disabled');
+    expect(spawned).toBe(false);
   });
 });
 
@@ -2177,14 +2339,14 @@ describe('runAgentResume', () => {
     expect(control.called).toBe(0);
   });
 
-  test('HARD-DISABLE — a claude-code RESUME is refused at preflight (never reaches ccExecute), flag ON', async () => {
-    // Phase C shake-out: runAgentResume calls the SAME preflight before its
-    // cc branch (runner.ts:287, before the ccExecute at :293). Like runAgent, a
-    // resumed claude-code run is now refused with claude_code_disabled regardless
-    // of the env flag — ccExecute is unreachable from BOTH entry points, so the
-    // cc-path floor/ceiling bypass (S-1/S-2) cannot be reached via resume either.
-    // (Historically this test asserted the resume branched to ccExecute and
-    // completed — FIX #8; that path is now hard-disabled.)
+  test('a claude-code RESUME (document path) is refused at preflight (never reaches ccExecute), flag ON', async () => {
+    // runAgentResume calls the SAME document-path preflight before its cc branch.
+    // A resume reconstructs a DOCUMENT run (no conversationId) — it is never
+    // attended, so ccGateBlocks refuses it with claude_code_disabled regardless of
+    // the env flag. The attended-only allow lives on the conversation path, which
+    // resume never takes; the cc-path floor bypass (S-1) cannot be reached via
+    // resume. (Historically this asserted the resume branched to ccExecute and
+    // completed — FIX #8; the document/resume path stays refused.)
     const { db, workspace, project, user, agent, parent, run } = await scaffold({
       withAiKey: false,
       agentOverrides: { provider: 'claude-code', requires_approval: false },
@@ -2321,12 +2483,13 @@ describe('rejectRun', () => {
 // ==========================================================================
 
 describe('runAgent claude-code branch', () => {
-  test('claude-code run: refused at preflight — ccExecute never runs, no transcript/result, flag ON', async () => {
-    // Phase C shake-out: ccExecute is UNREACHABLE from runAgent (preflight step 0
-    // refuses before the branch at runner.ts:209). The CLI is never spawned, no
-    // transcript is captured, and no kind=result comment is posted — the run
-    // simply fails with claude_code_disabled. (Historically this asserted an
-    // end-to-end cc completion that posted a result + stored the transcript.)
+  test('claude-code DOCUMENT run: refused at preflight — ccExecute never runs, no transcript/result, flag ON', async () => {
+    // A document run is never attended (no conversationId), so ccGateBlocks
+    // refuses it at preflight step 0 even with the flag ON — ccExecute is not
+    // reached on this path. The CLI is never spawned, no transcript is captured,
+    // and no kind=result comment is posted; the run fails with claude_code_disabled.
+    // (Historically this asserted an end-to-end cc completion that posted a result
+    // + stored the transcript; cc now runs only via the attended operator path.)
     const { db, workspace, project, user, agent, parent, run } = await scaffold({
       withAiKey: false,
       agentOverrides: { provider: 'claude-code', requires_approval: false },
@@ -2421,12 +2584,12 @@ describe('runAgent claude-code branch', () => {
     }
   });
 
-  test('claude-code run: cc-run token is NEVER minted — refused before the mint (flag ON)', async () => {
-    // Phase C shake-out: the ephemeral cc-run:<runId> token used to be minted
-    // inside ccExecute, just before the spawn. ccExecute is now unreachable
-    // (preflight refuses first), so no such token is ever created — there is
-    // nothing to revoke. (Historically two tests verified the mint→revoke
-    // lifecycle on both the success and failure paths.)
+  test('claude-code DOCUMENT run: cc-run token is NEVER minted — refused before the mint (flag ON)', async () => {
+    // The ephemeral cc-run:<runId> token is minted inside ccExecute, just before
+    // the spawn. On a DOCUMENT run ccGateBlocks refuses at preflight before that
+    // branch, so no such token is ever created — there is nothing to revoke. (On
+    // the attended operator path, where cc IS reachable, the mint→revoke lifecycle
+    // does run; that is exercised by the operator-gate describe block above.)
     const { db, run } = await scaffold({
       withAiKey: false,
       agentOverrides: { provider: 'claude-code', requires_approval: false },
@@ -2997,14 +3160,13 @@ describe('Phase B — API-provider injection fence (B10a) + skill wiring (B3)', 
     expect(parentIdx).toBeGreaterThan(0);
   });
 
-  test('cc path prompt-building is UNREACHABLE — a skill-bearing cc run is refused before any spawn (flag ON)', async () => {
+  test('cc path prompt-building on a DOCUMENT run is unreached — a skill-bearing cc run is refused before any spawn (flag ON)', async () => {
     // Historically this verified the cc-path trust-envelope split (skills →
     // trusted system prompt; parent/comments → untrusted DATA envelope, B3/B10a)
-    // by capturing the spawned `claude -p <prompt>` argument. Phase C shake-out:
-    // ccExecute (where that prompt is built + the CLI spawned) is now unreachable
-    // — preflight refuses the cc run first — so the prompt is never built and the
-    // CLI is never spawned. The trust-split logic still lives in ccExecute for the
-    // eventual cc-path-authority revival, but it cannot be exercised via the runner.
+    // by capturing the spawned `claude -p <prompt>` argument. This is a DOCUMENT
+    // run (no conversationId), so ccGateBlocks refuses it at preflight before the
+    // branch — the prompt is never built and the CLI is never spawned. The
+    // trust-split logic runs only on the attended operator path now.
     const scaffolded = await scaffold({
       agentOverrides: { provider: 'claude-code' },
       runOverrides: { provider: 'claude-code' },
