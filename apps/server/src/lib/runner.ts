@@ -1983,7 +1983,17 @@ async function ccExecute(ctx: RunContext): Promise<void> {
     }
 
     await postAgentComment(ctx, outcome.result, 'result');
-    await transitionRun(ctx.run.id, { newStatus: 'completed', actor: ctx.transitionActor });
+    // Lifecycle transition through the polymorphic sink (mirrors postResultAndComplete):
+    // conv → NO-OP (a conversation run has NO `agent_run` row — a direct
+    // transitionRun here threw AGENT_RUN_NOT_FOUND (404), which escaped to
+    // runAgent's last-resort catch and surfaced a contradictory "couldn't complete"
+    // message AFTER the result above — F1); the `active_run_id` slot, cleared by the
+    // runAgent conversation finally, is the liveness record. doc → the real
+    // transitionRun(completed) (it has an agent_run row), so a document cc run — were
+    // it ever allowed past the attended-only preflight — still completes correctly.
+    // cc has no Anthropic-style stop reason, so done_reason stays undefined (the
+    // failure branch above already routes through the sink's failRun).
+    await ctx.runSink.complete(undefined);
   } finally {
     // Revoke the ephemeral MCP token regardless of success or failure. No-op if
     // the mint never ran (ccTokenId stays null on a pre-mint throw).

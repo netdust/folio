@@ -722,6 +722,64 @@ describe('claude-code operator gate (conversation path)', () => {
     expect(capturedArgv).not.toContain('--model');
   });
 
+  test('attended operator + flag ON + cc EXIT 0 → result posted, run completes CLEANLY (no AGENT_RUN_NOT_FOUND, no "couldn\'t complete" message)', async () => {
+    // F1 (CRITICAL) regression guard. The cc SUCCESS path posted its result then
+    // called transitionRun(completed) DIRECTLY — but a conversation run has no
+    // `agent_run` document, so transitionRun threw AGENT_RUN_NOT_FOUND (404). That
+    // throw escaped ccExecute → runAgent's last-resort catch, which surfaced a
+    // CONTRADICTORY "⚠️ The operator couldn't complete this turn: …" message AFTER
+    // the result. The :698 test above only asserted `spawned===true` and stopped —
+    // it never asserted the run reached a clean terminal state, which is why a green
+    // suite shipped F1. The fix routes completion through ctx.runSink.complete
+    // (conv → NO-OP; doc → the real transitionRun), mirroring postResultAndComplete.
+    const { db, seed } = await makeTestApp();
+    const prev = env.FOLIO_CLAUDE_CODE_ENABLED;
+    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
+    __setCcSpawnForTest(() => ({
+      stdoutText: async () => 'cc did the work',
+      stderrText: async () => '',
+      exited: Promise.resolve(0),
+      kill: () => {},
+    }));
+    let convId = '';
+    let runId = '';
+    try {
+      ({ convId, runId } = await runOperatorCc(db, seed));
+    } finally {
+      __setCcSpawnForTest(undefined);
+      (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prev;
+    }
+
+    const msgs = await db.query.messages.findMany({ where: eq(messages.conversationId, convId) });
+    const bodies = msgs.map((m) => m.body ?? '');
+
+    // (a) The cc result IS posted to the conversation thread.
+    expect(bodies.some((b) => b.includes('cc did the work'))).toBe(true);
+
+    // (b) NO error / 404 / "couldn't complete" message — the contradictory
+    // failRunLastResort surface (runner.ts ~2259) and the conversation sink's
+    // fail() surface (run-sink.ts ~260) must BOTH be absent on a successful run.
+    const joined = bodies.join('\n');
+    expect(joined).not.toMatch(/couldn.t complete this turn/i);
+    expect(joined).not.toMatch(/could not finish this turn/i);
+    expect(joined).not.toMatch(/AGENT_RUN_NOT_FOUND/);
+    expect(joined).not.toMatch(/\(404\)/);
+
+    // (c) The run completed CLEANLY: a conversation run's liveness record is the
+    // `active_run_id` slot (it has no agent_run status). On every terminal path —
+    // success or failure — runAgent's finally clears it. So a cleared slot proves
+    // the run terminated; combined with (a)+(b) it proves it terminated as a
+    // SUCCESS, not via the last-resort failure catch. The result message is also
+    // run-linked to this run.
+    const conv = await db.query.conversations.findFirst({
+      where: eq(conversations.id, convId),
+    });
+    expect(conv?.activeRunId).toBeNull();
+    expect(msgs.some((m) => m.runId === runId && (m.body ?? '').includes('cc did the work'))).toBe(
+      true,
+    );
+  });
+
   test('the minted cc-run MCP token carries a short non-null expiresAt (security: a leaked cc token must self-expire)', async () => {
     // SECURITY (review Finding 1): the cc-run token is revoked unconditionally in
     // ccExecute's finally — but if a post-mint read threw before the finally, the
