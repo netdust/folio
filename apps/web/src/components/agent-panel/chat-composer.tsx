@@ -1,4 +1,4 @@
-import { ArrowUp } from 'lucide-react';
+import { ArrowUp, Sparkles } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { cn } from '../ui/cn.ts';
 
@@ -9,13 +9,20 @@ import { cn } from '../ui/cn.ts';
  * model (M14) is enforced server-side too, but blocking the field here avoids a
  * pointless 409 round-trip. Presentational: the parent owns the conversation and
  * decides what `onSubmit` does (create-then-post, or post).
+ *
+ * `modelLabel` + `modeLabel` feed the footer status row only (cosmetic); the
+ * composer doesn't act on them.
  */
 export function ChatComposer({
   onSubmit,
   busy,
+  modelLabel = 'Operator Pro',
+  modeLabel = 'Auto-run mode',
 }: {
   onSubmit: (text: string) => void | Promise<void>;
   busy: boolean;
+  modelLabel?: string;
+  modeLabel?: string;
 }) {
   const [value, setValue] = useState('');
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -68,10 +75,17 @@ export function ChatComposer({
           aria-label="Send"
           disabled={busy || value.trim().length === 0}
           onClick={submit}
-          className="shrink-0 rounded-md bg-primary p-1 text-primary-fg transition-opacity duration-fast disabled:opacity-40"
+          className="grid size-8 shrink-0 place-items-center rounded-md bg-primary text-primary-fg transition-opacity duration-fast disabled:opacity-40"
         >
           <ArrowUp className="size-4" aria-hidden="true" />
         </button>
+      </div>
+      <div className="mt-1.5 flex items-center justify-between px-1 text-[11px] text-fg-3">
+        <span className="flex items-center gap-1 truncate">
+          <Sparkles className="size-3 shrink-0" aria-hidden="true" />
+          {modelLabel} · {modeLabel}
+        </span>
+        <span className="shrink-0 font-mono">⌘↵ to send</span>
       </div>
     </div>
   );

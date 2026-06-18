@@ -14,6 +14,16 @@ vi.mock('../../lib/api/conversations.ts', async (importOriginal) => {
   };
 });
 
+// The header reads the workspace name via useWorkspace (react-query). Mock it so
+// the panel test doesn't need a QueryClientProvider.
+vi.mock('../../lib/api/workspaces.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/api/workspaces.ts')>();
+  return {
+    ...actual,
+    useWorkspace: () => ({ data: { name: 'QA' } }),
+  };
+});
+
 import { agentPanelBus } from '../../lib/agent-panel-bus.ts';
 import { AgentCockpitPanel } from './agent-cockpit-panel.tsx';
 
@@ -31,15 +41,26 @@ describe('AgentCockpitPanel', () => {
     expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
   });
 
-  it('renders the operator CHAT (composer) when open — not Activity/Run tabs', async () => {
+  it('opens on the Chat tab with the composer and the tab bar', async () => {
     render(<AgentCockpitPanel />);
     act(() => agentPanelBus.open());
-    // The cockpit body is the chat: a composer textbox is present.
+    // Chat is the default tab: the composer textbox is present.
     expect(await screen.findByRole('textbox')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
-    // No tab buttons from the deleted Activity/Run surfaces.
-    expect(screen.queryByRole('button', { name: /^activity$/i })).toBeNull();
-    expect(screen.queryByRole('button', { name: /^run$/i })).toBeNull();
+    // The Chat / Activity / History tab bar is present.
+    expect(screen.getByRole('button', { name: /^chat$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^activity/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^history$/i })).toBeInTheDocument();
+  });
+
+  it('switches the body when the Activity tab is clicked', async () => {
+    render(<AgentCockpitPanel />);
+    act(() => agentPanelBus.open());
+    // Chat body (composer) is visible to start.
+    expect(await screen.findByRole('textbox')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^activity/i }));
+    // Activity placeholder shows; the chat composer is hidden (still mounted).
+    expect(screen.getByText(/no operator activity yet/i)).toBeInTheDocument();
   });
 
   it('closes when the Close button is clicked', async () => {

@@ -475,7 +475,7 @@ function WorkspaceLayout() {
             </div>
           </div>
         }
-        panel={<AgentCockpitPanel />}
+        panel={<AgentCockpitPanel wslug={wslug} />}
       />
       <WorkspaceCreate open={creatingWorkspace} onOpenChange={setCreatingWorkspace} />
       <ProjectCreate wslug={wslug} open={creatingProject} onOpenChange={setCreatingProject} />

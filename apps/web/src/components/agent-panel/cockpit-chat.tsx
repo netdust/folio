@@ -1,5 +1,5 @@
 import { MessagesSquare } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import {
   type ConversationMessage,
@@ -27,7 +27,28 @@ import { MessageList } from './message-list.tsx';
  * conversation is posted to in the same handler — no ref/effect bridge (the old
  * create-then-post race + lost-first-message bugs are gone, review #2/#3/#8).
  */
-export function CockpitChat({ conversationId }: { conversationId?: string }) {
+/**
+ * `onThreadState` lifts the live thread state the cockpit CHROME needs (the
+ * header status line + the Activity tab badge) without that chrome having to
+ * own the conversation. `CockpitChat` remains the single owner of `activeId`,
+ * the seed/live-tail, and the send handler.
+ */
+export interface CockpitThreadState {
+  busy: boolean;
+  toolStepCount: number;
+}
+
+export function CockpitChat({
+  conversationId,
+  modelLabel,
+  modeLabel,
+  onThreadState,
+}: {
+  conversationId?: string;
+  modelLabel?: string;
+  modeLabel?: string;
+  onThreadState?: (state: CockpitThreadState) => void;
+}) {
   const [activeId, setActiveId] = useState<string | undefined>(conversationId);
   const { thread, messages } = useConversation(activeId);
 
@@ -43,6 +64,16 @@ export function CockpitChat({ conversationId }: { conversationId?: string }) {
   const [optimistic, setOptimistic] = useState<string | null>(null);
 
   const busy = sending || thread?.activeRunId != null;
+
+  // Lift the chrome-facing thread state up. Count tool_step rows for the
+  // Activity badge; report busy for the header status line.
+  const toolStepCount = useMemo(
+    () => messages.filter((m) => m.kind === 'tool_step').length,
+    [messages],
+  );
+  useEffect(() => {
+    onThreadState?.({ busy, toolStepCount });
+  }, [busy, toolStepCount, onThreadState]);
 
   const handleSubmit = async (text: string) => {
     if (busy) return;
@@ -101,7 +132,12 @@ export function CockpitChat({ conversationId }: { conversationId?: string }) {
           />
         )}
       </div>
-      <ChatComposer onSubmit={handleSubmit} busy={busy} />
+      <ChatComposer
+        onSubmit={handleSubmit}
+        busy={busy}
+        modelLabel={modelLabel}
+        modeLabel={modeLabel}
+      />
     </div>
   );
 }
