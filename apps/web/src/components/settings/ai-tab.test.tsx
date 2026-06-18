@@ -451,6 +451,7 @@ describe('AiTab', () => {
 
   describe('Claude Code (local) operator option', () => {
     test('offers a Claude Code operator option that sets the keyless operator model', async () => {
+      const user = userEvent.setup();
       const setMutate = vi.fn().mockResolvedValue({ ok: true });
       vi.mocked(useSetOperatorModel).mockReturnValue({
         mutateAsync: setMutate,
@@ -462,7 +463,7 @@ describe('AiTab', () => {
       // The cc button has a distinct aria-label to disambiguate from the per-key
       // "Use for operator" buttons.
       const btn = await screen.findByRole('button', { name: /use claude code for operator/i });
-      await userEvent.click(btn);
+      await user.click(btn);
       expect(setMutate).toHaveBeenCalledWith({
         provider: 'claude-code',
         model: 'default',
