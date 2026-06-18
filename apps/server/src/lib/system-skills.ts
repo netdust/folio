@@ -260,23 +260,57 @@ folio_api  POST /api/v1/w/<wslug>/p/marketing/fields
 folio_api  POST /api/v1/w/<wslug>/p/marketing/statuses
   { "key": "in_progress", "name": "In progress", "color": "blue", "category": "started" }
 
-# 5. A view over the table. The \`type\` value is exactly \`"kanban"\` (NOT "board"
-#    — the natural word 400s with a Zod enum error and costs a round-trip).
-#    Grouping is \`groupBy\` (top-level), NOT \`config.group_by\`.
+# 5. Views over the table. A good project ships at least a DEFAULT table view
+#    (the landing list) plus the views the work actually needs — pick types that
+#    fit (kanban for flow, calendar for dated work, etc.). See "Views — the full
+#    vocabulary" below for filters/sort/groupBy/visibleFields/settings/isDefault.
+#    A fresh project is auto-seeded a default table + a kanban; only add/adjust
+#    views beyond that. \`type\` is exact (\`"kanban"\`, NOT "board" — 400s).
 folio_api  POST /api/v1/w/<wslug>/p/marketing/views
-  { "name": "Board", "type": "kanban", "groupBy": "status" }
+  { "name": "Board", "type": "kanban", "groupBy": "status", "visibleFields": ["priority","assignee"] }
 \`\`\`
 
-### Author a view with a filter
+Design views to the request, don't just drop one kanban: a bug tracker wants a kanban grouped by \`status\` + a table filtered to open bugs; a content calendar wants a \`calendar\` on \`due_date\` + a table. Match the view type to how the work is actually looked at.
+
+### Views — the full vocabulary (read this before configuring any view)
+
+A view is a saved, typed lens over a table. \`POST\`/\`PATCH\` \`/api/v1/w/<wslug>/p/<pslug>/views\` (config:write, risk-gated). The body fields:
+
+- **\`name\`** (required, 1-80 chars).
+- **\`type\`** (required) — the renderer, EXACTLY one of: \`table\` | \`list\` | \`kanban\` | \`calendar\` | \`timeline\` | \`gallery\`. (NOT "board" — that 400s the Zod enum.) The type IS the render mode; there is no separate route per type.
+- **\`filters\`** (PLURAL — \`filter\` singular is an unknown field and 400s). A FilterAST object, NOT flat key/value. Operators: \`$eq\`, \`$ne\`, \`$gt\`, \`$gte\`, \`$lt\`, \`$lte\`, \`$in\`, \`$nin\`, \`$contains\`; combine with \`$and\`/\`$or\`. Keys are frontmatter field keys. Invalid filters 422 (\`INVALID_FILTER\`). The seeded default work-item filter is \`{ "type": { "$eq": "work_item" } }\`. Example "high priority assigned to me": \`{ "$and": [ { "priority": { "$eq": "high" } }, { "assignee": { "$eq": "me" } } ] }\`.
+- **\`sort\`** — an ARRAY of \`{ "key": <fieldKey>, "dir": "asc" | "desc" }\` (NOT a single field string). E.g. \`[ { "key": "updated_at", "dir": "desc" } ]\`.
+- **\`groupBy\`** — a field key (top-level, NOT \`config.group_by\`). Required-in-spirit for a \`kanban\` (it's the column axis, e.g. \`"status"\`); optional elsewhere.
+- **\`visibleFields\`** — an ARRAY of field keys to show, in nothing-special order, e.g. \`["title","status","priority","assignee","due_date","updated_at"]\`. Omit/\`[]\` = sensible defaults. These are frontmatter KEYS, not ids.
+- **\`columnOrder\`** — an array of field keys giving left-to-right column order (table/list).
+- **\`settings\`** — a freeform per-type config object. The one that matters today: a \`calendar\` view needs the date field via \`settings\`, e.g. \`{ "dateField": "due_date" }\`; a \`timeline\` similarly keys off a date field.
+- **\`order\`** — integer, the view's position in the rail (lower = earlier).
+- **\`isDefault\`** — boolean; the project's default view. There is exactly one; it is DELETE-PROTECTED (deleting it 409s \`VIEW_PROTECTED\`). To change which view is default, set \`isDefault: true\` on another (don't try to delete the current one first).
+
+\`groupBy\`, every \`sort[].key\`, and every \`visibleFields\` entry must reference a field key that exists on the documents (a pinned \`fields\` key, or a common frontmatter key like \`title\`/\`status\`/\`priority\`/\`assignee\`/\`due_date\`/\`updated_at\`). They are keys, never ids, never field objects.
+
+### Author views — worked examples
 
 \`\`\`
+# A filtered TABLE view (sorted, explicit columns):
 folio_api  POST /api/v1/w/<wslug>/p/marketing/views
   {
-    "name": "My high-priority",
-    "type": "table",
-    "filter": { "priority": "high", "assignee": "me" }
+    "name": "Open & mine", "type": "table",
+    "filters": { "$and": [ { "status": { "$ne": "done" } }, { "assignee": { "$eq": "me" } } ] },
+    "sort": [ { "key": "updated_at", "dir": "desc" } ],
+    "visibleFields": ["title","status","priority","assignee","due_date"]
   }
+
+# A KANBAN board grouped by status:
+folio_api  POST /api/v1/w/<wslug>/p/marketing/views
+  { "name": "Board", "type": "kanban", "groupBy": "status", "visibleFields": ["priority","assignee"] }
+
+# A CALENDAR view keyed off the due date:
+folio_api  POST /api/v1/w/<wslug>/p/marketing/views
+  { "name": "Schedule", "type": "calendar", "settings": { "dateField": "due_date" } }
 \`\`\`
+
+\`list\`, \`timeline\`, and \`gallery\` use the same body shape — set \`type\` accordingly (a \`timeline\` keys off a date field via \`settings\` like \`calendar\`; \`gallery\`/\`list\` mainly use \`filters\`/\`sort\`/\`visibleFields\`).
 
 Preview first if unsure — add \`"dryRun": true\` to the body and read back \`would\`.
 

@@ -31,6 +31,26 @@ describe('system skill + reference content', () => {
     // both surfaces carry the "not found here ≠ doesn't exist" widen rule
     expect(OPERATOR_PROMPT.toLowerCase()).toContain('look in the others');
   });
+  // Regression: the skill must teach the full Phase-6 view vocabulary so the
+  // operator sets up views correctly. (It previously only knew kanban+table and
+  // had a filter→filters bug that 400s.) Guards the bug fix + the view-type and
+  // config-field coverage.
+  test('the folio skill documents the full view vocabulary (filters plural, all 6 types, config fields)', () => {
+    // the filter→filters bug must stay fixed (singular 400s)
+    expect(FOLIO_SKILL_BODY).toContain('filters');
+    expect(FOLIO_SKILL_BODY).toContain('$eq'); // FilterAST, not flat k/v
+    // all six view types are named in the enum line (the less-common ones are
+    // the real coverage signal — 'table'/'list' are common substrings, but
+    // calendar/timeline/gallery only appear because the view vocab documents them)
+    for (const t of ['kanban', 'calendar', 'timeline', 'gallery']) {
+      expect(FOLIO_SKILL_BODY).toContain(t);
+    }
+    // the view-config surface that lets the operator build a real project
+    expect(FOLIO_SKILL_BODY).toContain('visibleFields');
+    expect(FOLIO_SKILL_BODY).toContain('groupBy');
+    expect(FOLIO_SKILL_BODY).toContain('isDefault');
+    expect(FOLIO_SKILL_BODY).toContain('dateField'); // calendar settings
+  });
   test('every operator tool is a real V1_MCP_TOOLS member', () => {
     for (const t of OPERATOR_TOOLS) expect(V1_MCP_TOOLS).toContain(t);
   });
