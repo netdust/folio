@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { type CcOutcome, type SpawnFn, runClaudeCode } from './cc-executor.ts';
+import { type CcOutcome, type SpawnFn, defaultSpawn, runClaudeCode } from './cc-executor.ts';
 
 function fakeSpawn(opts: { stdout: string; exitCode: number; stderr?: string }): SpawnFn {
   return () => ({
@@ -200,5 +200,108 @@ describe('runClaudeCode', () => {
       { spawn: spy },
     );
     expect(argv).not.toContain('--allowedTools');
+  });
+
+  // A wedged `claude -p` (the live bug: subprocess sits sleeping, never exits,
+  // holding the conversation's active_run_id slot forever) must be killed on a
+  // deadline and reported as failed — not awaited indefinitely. The fake here
+  // models a wedge: exited never resolves and the drains never settle.
+  test('kills and fails the run when claude wedges past the timeout', async () => {
+    let killed = false;
+    const wedged: SpawnFn = () => ({
+      // A real wedge drains nothing — these never settle.
+      stdoutText: () => new Promise<string>(() => {}),
+      stderrText: () => new Promise<string>(() => {}),
+      exited: new Promise<number>(() => {}),
+      kill: () => {
+        killed = true;
+      },
+    });
+
+    const start = Date.now();
+    const outcome = await runClaudeCode(
+      {
+        systemPrompt: 'x',
+        model: undefined,
+        mcpToken: 't',
+        mcpUrl: undefined,
+        cwd: '/tmp',
+        timeoutMs: 50,
+      },
+      { spawn: wedged },
+    );
+    const elapsed = Date.now() - start;
+
+    // It must RETURN (not hang) shortly after the deadline.
+    expect(elapsed).toBeLessThan(2000);
+    expect(outcome.status).toBe('failed');
+    if (outcome.status === 'failed') expect(outcome.detail).toMatch(/timed out/i);
+    // The wedged subprocess must be killed so it releases the conversation slot.
+    expect(killed).toBe(true);
+  });
+
+  test('timeout detail names the configured deadline', async () => {
+    const wedged: SpawnFn = () => ({
+      stdoutText: () => new Promise<string>(() => {}),
+      stderrText: () => new Promise<string>(() => {}),
+      exited: new Promise<number>(() => {}),
+      kill: () => {},
+    });
+    const outcome = await runClaudeCode(
+      {
+        systemPrompt: 'x',
+        model: undefined,
+        mcpToken: 't',
+        mcpUrl: undefined,
+        cwd: '/tmp',
+        timeoutMs: 50,
+      },
+      { spawn: wedged },
+    );
+    expect(outcome.status).toBe('failed');
+    // Detail should mention the timeout window so the operator log is actionable.
+    if (outcome.status === 'failed') expect(outcome.detail).toMatch(/50\s*ms/i);
+  });
+
+  test('a fast clean exit is unaffected by the timeout (no false-positive kill)', async () => {
+    let killed = false;
+    const fast: SpawnFn = () => ({
+      stdoutText: async () => 'all good',
+      stderrText: async () => '',
+      exited: Promise.resolve(0),
+      kill: () => {
+        killed = true;
+      },
+    });
+    const outcome = await runClaudeCode(
+      {
+        systemPrompt: 'x',
+        model: undefined,
+        mcpToken: 't',
+        mcpUrl: undefined,
+        cwd: '/tmp',
+        timeoutMs: 50,
+      },
+      { spawn: fast },
+    );
+    expect(outcome.status).toBe('completed');
+    if (outcome.status === 'completed') expect(outcome.result).toBe('all good');
+    // Never kill a process that exited cleanly within the window.
+    expect(killed).toBe(false);
+  });
+
+  // stdin contract (Tier-B, one-line config): the default spawn must run the
+  // headless `claude -p` non-interactively, so any read on stdin gets immediate
+  // EOF instead of blocking on an inherited descriptor that never delivers.
+  test('defaultSpawn runs claude non-interactively (stdin gets EOF, never blocks)', async () => {
+    // `cat` reads stdin until EOF. Under stdin:'ignore' it gets EOF at once and
+    // exits 0 fast; an inherited-and-never-EOF stdin would block until killed.
+    const handle = defaultSpawn({ argv: ['cat'], cwd: '/tmp', env: {} });
+    const killTimer = setTimeout(() => handle.kill(), 1500);
+    const code = await handle.exited;
+    clearTimeout(killTimer);
+    // Drain to avoid dangling the piped stream.
+    await handle.stdoutText();
+    expect(code).toBe(0);
   });
 });
