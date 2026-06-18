@@ -6,6 +6,7 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { db } from '../db/client.ts';
 import { documents, users, workspaceAccess, workspaces } from '../db/schema.ts';
+import { env } from '../env.ts';
 import { canManageWorkspace } from '../lib/access.ts';
 import { seedBuiltinTriggers } from '../lib/builtin-triggers.ts';
 import { emitEvent, txWithEvents } from '../lib/events.ts';
@@ -173,10 +174,17 @@ workspacesRoute.post(
 const workspaceItemRoute = new Hono<AuthContext & ScopeContext>();
 
 workspaceItemRoute.get('/', (c) =>
-  // claude-code is hard-disabled at the runner preflight — never advertise it as
-  // selectable; the env flag (env.FOLIO_CLAUDE_CODE_ENABLED) no longer enables
-  // execution, so showing the cc provider option in the UI would be a footgun.
-  jsonOk(c, { ...getWorkspace(c), role: getRole(c), claude_code_enabled: false }),
+  // Mirrors the install's env opt-in (FOLIO_CLAUDE_CODE_ENABLED). This feeds the
+  // per-agent provider picker (provider-model-field.tsx) — a different surface
+  // from the operator selector. cc is now operator-selectable when the flag is on
+  // (attended-only, gated at the runner preflight by ccGateBlocks); the flag is
+  // OFF by default and never set on a shared/hosted image, so the option stays
+  // hidden there.
+  jsonOk(c, {
+    ...getWorkspace(c),
+    role: getRole(c),
+    claude_code_enabled: env.FOLIO_CLAUDE_CODE_ENABLED,
+  }),
 );
 
 workspaceItemRoute.patch(

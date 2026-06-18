@@ -880,7 +880,7 @@ async function loadAgentDefinition(
  * Returns {blocked:false} for any non-cc provider (the caller proceeds normally),
  * and a flag-distinguishing reason when cc is blocked.
  */
-function ccGateBlocks(ctx: RunContext): { blocked: boolean; reason?: string } {
+function ccGateBlocks(ctx: RunContext): { blocked: false } | { blocked: true; reason: string } {
   if (ctx.fm.provider !== 'claude-code') return { blocked: false };
   if (!env.FOLIO_CLAUDE_CODE_ENABLED) {
     return {
@@ -911,12 +911,10 @@ async function preflight(ctx: RunContext, excludeRunId?: string): Promise<boolea
   // where ccGateBlocks performs the same check and may ALLOW. Cheapest check —
   // runs before any DB work. (cc branch points: runAgent runner.ts:348,
   // runAgentResume runner.ts:460.)
-  {
-    const gate = ccGateBlocks(ctx);
-    if (gate.blocked) {
-      await failRun(ctx, runErrorReasonSchema.enum.claude_code_disabled, gate.reason ?? '');
-      return true;
-    }
+  const ccGate = ccGateBlocks(ctx);
+  if (ccGate.blocked) {
+    await failRun(ctx, runErrorReasonSchema.enum.claude_code_disabled, ccGate.reason);
+    return true;
   }
 
   // 1 — provider key present. FIX #10 — loadContext already resolved + decrypted
@@ -1056,17 +1054,15 @@ async function conversationPreflight(ctx: RunContext): Promise<boolean> {
   // deliberately do NOT also `runSink.post` the reason: that would double-post the
   // same text on the thread (the single-failure-surface invariant — code-review
   // #4). The reason itself distinguishes "flag off" from "not an attended run".
-  {
-    const gate = ccGateBlocks(ctx);
-    if (gate.blocked) {
-      await failRun(ctx, runErrorReasonSchema.enum.claude_code_disabled, gate.reason ?? '');
-      return true;
-    }
-    // cc that PASSES the gate is keyless — it carries no secret and has no
-    // `ai_keys` row, so skip the key-presence checks below (which would otherwise
-    // block on keyRowMissing / requiresKey). This is the keyless exemption.
-    if (ctx.fm.provider === 'claude-code') return false;
+  const ccGate = ccGateBlocks(ctx);
+  if (ccGate.blocked) {
+    await failRun(ctx, runErrorReasonSchema.enum.claude_code_disabled, ccGate.reason);
+    return true;
   }
+  // cc that PASSES the gate is keyless — it carries no secret and has no
+  // `ai_keys` row, so skip the key-presence checks below (which would otherwise
+  // block on keyRowMissing / requiresKey). This is the keyless exemption.
+  if (ctx.fm.provider === 'claude-code') return false;
 
   // Block when the operator's configured key ROW is missing — for EVERY provider
   // (security review #1). A dangling reference (key deleted after selection) must
@@ -1883,22 +1879,6 @@ function warnIfUnmetered(runId: string, providerLabel: string, sawUsage: boolean
  * with the Task 7b token/lifecycle work.
  */
 async function ccExecute(ctx: RunContext): Promise<void> {
-  // Mint a short-lived scoped bearer token so CC can call back into Folio's MCP
-  // endpoint. The token mirrors the run's existing agent token (same scopes,
-  // agentId, projectIds) and is revoked unconditionally in the finally block.
-  const { token: ccToken, hash: ccHash } = newApiToken();
-  const ccTokenId = nanoid();
-  await db.insert(apiTokens).values({
-    id: ccTokenId,
-    workspaceId: ctx.token.workspaceId,
-    name: `cc-run:${ctx.run.id}`,
-    tokenHash: ccHash,
-    scopes: ctx.token.scopes,
-    agentId: ctx.token.agentId,
-    projectIds: ctx.token.projectIds,
-    createdBy: ctx.transitionActor,
-  });
-
   // Build the per-run task + document context (parent body + comment thread,
   // incl. the run's input comment) — the SAME source the API-provider path uses
   // via buildInitialMessages. Without this the CLI saw only the standing system
@@ -1941,20 +1921,48 @@ async function ccExecute(ctx: RunContext): Promise<void> {
       ? `${ctx.fm.system_prompt}\n\n---\n## Your reference skills\n\n${ccSkillsPreamble}`
       : ctx.fm.system_prompt;
 
+  // The ephemeral MCP token id, assigned at mint INSIDE the try below. Declared
+  // out here only so the finally can revoke it. Stays null until the mint runs,
+  // so the finally's delete is a no-op if a pre-mint statement ever throws.
+  let ccTokenId: string | null = null;
   try {
+    // SECURITY (review Finding 1): mint the short-lived scoped bearer token as the
+    // FIRST statement inside the try, so the finally below revokes it on EVERY
+    // post-mint throw. The token mirrors the run's existing agent token (same
+    // scopes, agentId, projectIds). Nothing above this line needs it — only
+    // runClaudeCode does. It carries a SHORT expiresAt (10 min) as defense in
+    // depth: even if the finally were somehow skipped, the bearer middleware
+    // honors a NULL-expiry token forever, so a leaked cc token must self-expire
+    // (bearer.ts only expires rows with expiresAt != null). A cc run is
+    // short-lived; 10 minutes is ample. matches token-reach.ts's expiresAt idiom.
+    const { token: ccToken, hash: ccHash } = newApiToken();
+    ccTokenId = nanoid();
+    await db.insert(apiTokens).values({
+      id: ccTokenId,
+      workspaceId: ctx.token.workspaceId,
+      name: `cc-run:${ctx.run.id}`,
+      tokenHash: ccHash,
+      scopes: ctx.token.scopes,
+      agentId: ctx.token.agentId,
+      projectIds: ctx.token.projectIds,
+      createdBy: ctx.transitionActor,
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+    });
+
+    // Empty OR the literal 'default' sentinel → omit --model (the local Claude
+    // Code picks its own model). The operator-model setting carries `model:
+    // 'default'` for cc (operatorModelSettingSchema keeps min(1), so 'default' is
+    // the non-empty sentinel that means "no explicit model"). cc-executor only
+    // adds --model when this is a non-empty string.
+    const ccModelRaw = (ctx.fm.model ?? '').trim();
+    const ccModel =
+      ccModelRaw.length > 0 && ccModelRaw.toLowerCase() !== 'default' ? ccModelRaw : undefined;
+
     const outcome = await runClaudeCode(
       {
         systemPrompt: ccSystemPrompt,
         taskContext,
-        model: (() => {
-          const m = (ctx.fm.model ?? '').trim();
-          // Empty OR the literal 'default' sentinel → omit --model (the local
-          // Claude Code picks its own model). The operator-model setting carries
-          // `model: 'default'` for cc (operatorModelSettingSchema keeps min(1), so
-          // 'default' is the non-empty sentinel that means "no explicit model").
-          // cc-executor only adds --model when this is a non-empty string.
-          return m.length > 0 && m.toLowerCase() !== 'default' ? m : undefined;
-        })(),
+        model: ccModel,
         mcpToken: ccToken,
         mcpUrl: `${env.PUBLIC_URL}/mcp`,
         // v1: Folio's own cwd (spec decision). CC's host context comes from the
@@ -1977,8 +1985,11 @@ async function ccExecute(ctx: RunContext): Promise<void> {
     await postAgentComment(ctx, outcome.result, 'result');
     await transitionRun(ctx.run.id, { newStatus: 'completed', actor: ctx.transitionActor });
   } finally {
-    // Revoke the ephemeral MCP token regardless of success or failure.
-    await db.delete(apiTokens).where(eq(apiTokens.id, ccTokenId));
+    // Revoke the ephemeral MCP token regardless of success or failure. No-op if
+    // the mint never ran (ccTokenId stays null on a pre-mint throw).
+    if (ccTokenId !== null) {
+      await db.delete(apiTokens).where(eq(apiTokens.id, ccTokenId));
+    }
   }
 }
 

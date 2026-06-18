@@ -722,6 +722,52 @@ describe('claude-code operator gate (conversation path)', () => {
     expect(capturedArgv).not.toContain('--model');
   });
 
+  test('the minted cc-run MCP token carries a short non-null expiresAt (security: a leaked cc token must self-expire)', async () => {
+    // SECURITY (review Finding 1): the cc-run token is revoked unconditionally in
+    // ccExecute's finally — but if a post-mint read threw before the finally, the
+    // row would survive, and a NULL expiresAt makes the bearer middleware honor a
+    // leaked cc token FOREVER (bearer.ts only expires rows with expiresAt != null).
+    // The mint must therefore set a TTL. The token is gone by the time runAgent
+    // returns (finally revokes it), so we capture the row state DURING the spawn —
+    // inside ccExecute's try, after the mint, before the revoke.
+    const { db, seed } = await makeTestApp();
+    const prev = env.FOLIO_CLAUDE_CODE_ENABLED;
+    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
+    let capturedExpiresAt: Date | null | undefined;
+    let capturedAt = 0;
+    __setCcSpawnForTest(() => {
+      // The cc-run token row exists here (minted just above the runClaudeCode call,
+      // not yet revoked by ccExecute's finally). name is `cc-run:<runId>`.
+      capturedAt = Date.now();
+      const ccRow = db
+        .select()
+        .from(apiTokens)
+        .all()
+        .find((t) => t.name.startsWith('cc-run:'));
+      capturedExpiresAt = ccRow?.expiresAt;
+      return {
+        stdoutText: async () => 'ok',
+        stderrText: async () => '',
+        exited: Promise.resolve(0),
+        kill: () => {},
+      };
+    });
+    try {
+      await runOperatorCc(db, seed);
+    } finally {
+      __setCcSpawnForTest(undefined);
+      (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prev;
+    }
+    // RED before the fix: the mint set no expiresAt → this is null.
+    expect(capturedExpiresAt).not.toBeNull();
+    expect(capturedExpiresAt).toBeInstanceOf(Date);
+    // A short TTL: in the future, and not longer than ~10 minutes out (range, not an
+    // exact ms — the mint uses a real clock, so assert a window to stay deterministic).
+    const ttlMs = (capturedExpiresAt as Date).getTime() - capturedAt;
+    expect(ttlMs).toBeGreaterThan(0);
+    expect(ttlMs).toBeLessThanOrEqual(10 * 60 * 1000 + 5_000);
+  });
+
   test('attended operator + flag OFF → claude_code_disabled, message names the FLAG', async () => {
     const { db, seed } = await makeTestApp();
     let spawned = false;
