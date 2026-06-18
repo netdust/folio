@@ -31,7 +31,7 @@ import { env } from '../env.ts';
 import { claimNextPlanningRun } from '../services/agent-runs.ts';
 import { createComment } from '../services/comments.ts';
 import { createConversationRun } from '../services/conversation-runs.ts';
-import { createConversation } from '../services/conversations.ts';
+import { appendMessage, createConversation } from '../services/conversations.ts';
 import { setOperatorModelSetting } from '../services/instance-settings.ts';
 import { makeTestApp } from '../test/harness.ts';
 import type { AgentRunFrontmatter } from './agent-run-schema.ts';
@@ -720,6 +720,83 @@ describe('claude-code operator gate (conversation path)', () => {
     expect(spawned).toBe(true);
     // The 'default' sentinel → no --model flag (the local Claude Code picks its own).
     expect(capturedArgv).not.toContain('--model');
+  });
+
+  test('attended operator + flag ON → the user cockpit message reaches `claude -p` (the conversation thread is the task source, NOT the operator identity prompt)', async () => {
+    // CRITICAL regression guard. The cc path built its task context from
+    // buildUntrustedContext(ctx) = ctx.parent.body + comments on ctx.parent.id.
+    // But loadConversationContext sets parent = agent, so ctx.parent.body is the
+    // operator's OWN identity prompt, and the user's actual cockpit message lives
+    // in the conversation `messages` thread — which ccExecute never read. So
+    // `claude -p` got systemPrompt = operator prompt AND taskContext = operator
+    // prompt again, with the user instruction nowhere in it; the operator
+    // correctly greeted and asked for a task instead of executing it. The fix
+    // branches the cc task source on conversation-ness (mirroring the API path's
+    // buildConversationMessages branch), replaying the thread via rowsToMessages so
+    // the user's turn lands inside the BEGIN CONTEXT envelope of the -p prompt.
+    const { db, seed } = await makeTestApp();
+    const userMessage = 'mark the work item Onboarding as in progress';
+    let capturedPrompt = '';
+    const prev = env.FOLIO_CLAUDE_CODE_ENABLED;
+    (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = true;
+    __setCcSpawnForTest((args) => {
+      // cc-executor.ts builds argv = ['claude', '-p', prompt, ...]; the prompt is
+      // `${systemPrompt}\n\n---\n\n${taskContext}` when taskContext is non-empty.
+      // The user's turn must appear inside that single -p string.
+      capturedPrompt = args.argv[args.argv.indexOf('-p') + 1] ?? '';
+      return {
+        stdoutText: async () => 'cc did the work',
+        stderrText: async () => '',
+        exited: Promise.resolve(0),
+        kill: () => {},
+      };
+    });
+    try {
+      // Seed the operator conversation, THEN post the user's cockpit turn into the
+      // thread before the run executes (mirrors how a real cockpit message arrives
+      // ahead of the turn it drives).
+      await seedInstanceSkills(db);
+      await setOperatorModelSetting(db, {
+        provider: 'claude-code',
+        model: 'default',
+        aiKeyLabel: 'default',
+      });
+      const conv = await createConversation(db, {
+        createdBy: seed.user.id,
+        operatorAgentId: '_operator',
+        title: 'Untitled',
+      });
+      await appendMessage(db, {
+        conversationId: conv.id,
+        role: 'user',
+        kind: 'text',
+        body: userMessage,
+      });
+      const runId = nanoid();
+      await createConversationRun(db, {
+        conversation: { id: conv.id, createdBy: seed.user.id },
+        runId,
+      });
+      await db
+        .update(conversations)
+        .set({ activeRunId: runId })
+        .where(eq(conversations.id, conv.id));
+      await runAgent({ runId });
+    } finally {
+      __setCcSpawnForTest(undefined);
+      (env as { FOLIO_CLAUDE_CODE_ENABLED: boolean }).FOLIO_CLAUDE_CODE_ENABLED = prev;
+    }
+    // The user's actual instruction must be present in the -p prompt…
+    expect(capturedPrompt).toMatch(/mark the work item/i);
+    // …and it must land INSIDE the untrusted DATA envelope (the user's request TO
+    // the operator is the task to act on; the envelope must NOT be removed — that
+    // is the prompt-injection guard for document content read mid-run).
+    const beginIdx = capturedPrompt.indexOf('===== BEGIN CONTEXT =====');
+    const endIdx = capturedPrompt.indexOf('===== END CONTEXT =====');
+    expect(beginIdx).toBeGreaterThanOrEqual(0);
+    expect(endIdx).toBeGreaterThan(beginIdx);
+    const envelope = capturedPrompt.slice(beginIdx, endIdx);
+    expect(envelope).toMatch(/mark the work item Onboarding as in progress/);
   });
 
   test('attended operator + flag ON + cc EXIT 0 → result posted, run completes CLEANLY (no AGENT_RUN_NOT_FOUND, no "couldn\'t complete" message)', async () => {

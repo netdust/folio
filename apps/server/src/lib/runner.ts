@@ -51,7 +51,7 @@ import {
 } from '../services/agent-runs.ts';
 import { type AuthorContext, createComment, listComments } from '../services/comments.ts';
 import { OPERATOR_MAX_TOKENS, takePendingConversationRun } from '../services/conversation-runs.ts';
-import { appendMessage, serializeMessage } from '../services/conversations.ts';
+import { appendMessage, getThread, serializeMessage } from '../services/conversations.ts';
 import {
   type OperatorModelSetting,
   getOperatorModelSetting,
@@ -68,7 +68,11 @@ import { type Message, type ProviderEvent, type ToolDef, getProvider } from './a
 import { sanitizeProviderError } from './ai/sanitize-error.ts';
 import { newApiToken } from './auth.ts';
 import { type SpawnFn, runClaudeCode } from './cc-executor.ts';
-import { buildConversationMessages } from './chat-thread-source.ts';
+import {
+  CONVERSATION_HISTORY_WINDOW,
+  buildConversationMessages,
+  rowsToMessages,
+} from './chat-thread-source.ts';
 import { conversationBus } from './conversation-bus.ts';
 import { decryptSecret } from './crypto.ts';
 import { HTTPError } from './http.ts';
@@ -1879,30 +1883,60 @@ function warnIfUnmetered(runId: string, providerLabel: string, sawUsage: boolean
  * with the Task 7b token/lifecycle work.
  */
 async function ccExecute(ctx: RunContext): Promise<void> {
-  // Build the per-run task + document context (parent body + comment thread,
-  // incl. the run's input comment) — the SAME source the API-provider path uses
-  // via buildInitialMessages. Without this the CLI saw only the standing system
-  // prompt and was blind to what it was acting on. Flattened to labelled text
-  // because `claude -p` takes a single prompt string. Empty when there's no
-  // parent/task (e.g. a "create a project" run) — the agent acts from identity.
+  // Build the per-run task context, flattened to labelled text because `claude -p`
+  // takes a single prompt string. The SOURCE branches on conversation-ness,
+  // mirroring the API-provider path (the buildConversationMessages vs
+  // buildInitialMessages fork in runAgent):
+  //
+  //   - CONVERSATION run (cockpit): the task is the user's typed turn, which lives
+  //     in the conversation `messages` thread — NOT on the parent. A conversation
+  //     run sets parent = the operator agent (loadConversationContext), so
+  //     buildUntrustedContext(ctx) would read the operator's OWN identity prompt
+  //     (parent.body) and find no comments — the user's actual instruction would
+  //     never reach `claude -p`, and the operator would just greet and ask for a
+  //     task. So replay the trusted thread via rowsToMessages (the raw thread→
+  //     messages replay, NO skills preamble — buildConversationMessages PREPENDS a
+  //     skills block, which would DOUBLE-INJECT here because cc already folds skills
+  //     into ccSystemPrompt + the unblessed envelope below). Apply the SAME tail
+  //     window buildConversationMessages uses (bounded BYOK cost).
+  //   - DOCUMENT run: the task is the parent doc body + its comment thread, exactly
+  //     as before, via buildUntrustedContext(ctx).
+  //
+  // Without a task source the CLI saw only the standing system prompt and was blind
+  // to what it was acting on. Empty when there's genuinely no task (e.g. a
+  // "create a project" conversation with an empty thread) — the agent acts from
+  // identity.
   // FIX #4: the flattened messages are UNTRUSTED text (document bodies + comment
-  // thread). Wrap them in an explicit DATA envelope that tells the model this
-  // region is input to act on, NOT instructions to follow — a bounded mitigation
-  // for prompt injection, not a guarantee. The API-provider path gets stronger
-  // structural separation via per-message roles; the cc path has only this fenced
-  // envelope under a single `-p` string, so the guardrail is intentionally explicit.
-  // Build the untrusted context from parent body + comments ONLY (NOT
-  // buildInitialMessages, which prepends the trusted skills block). The agent's
-  // own skills must NOT be enveloped as untrusted DATA — they fold into the
-  // trusted systemPrompt below. (B3/B10a: without this split, a `claude-code`
-  // agent declaring skills would have its own definition mislabelled untrusted.)
+  // thread; for a conversation, the user's own request, which is exactly the task to
+  // act on). Wrap them in an explicit DATA envelope that tells the model this region
+  // is input to act on, NOT instructions to follow — a bounded mitigation for prompt
+  // injection embedded in DOCUMENT content, not a guarantee. The API-provider path
+  // gets stronger structural separation via per-message roles; the cc path has only
+  // this fenced envelope under a single `-p` string, so the guardrail is
+  // intentionally explicit. The agent's OWN skills must NOT be enveloped as untrusted
+  // DATA — they fold into the trusted systemPrompt below. (B3/B10a: without this
+  // split, a `claude-code` agent declaring skills would have its own definition
+  // mislabelled untrusted.)
+  let taskMessages: Message[];
+  if (ctx.runSink.isConversation) {
+    const all = await getThread(db, requireConversationId(ctx));
+    // Tail window: getThread is seq-ascending, so the window is the END of the
+    // array — same slice buildConversationMessages applies (bounded replay cost).
+    const rows =
+      all.length > CONVERSATION_HISTORY_WINDOW
+        ? all.slice(all.length - CONVERSATION_HISTORY_WINDOW)
+        : all;
+    taskMessages = rowsToMessages(rows);
+  } else {
+    taskMessages = await buildUntrustedContext(ctx);
+  }
   const ccUntrustedSkills = buildUntrustedSkillsPreamble(ctx);
   const contextBody = [
     // B1 — fold UNBLESSED skills into the cc untrusted DATA envelope (NEVER the
     // trusted ccSystemPrompt below). Prepended so it rides inside the same
-    // BEGIN/END markers as document/comment content.
+    // BEGIN/END markers as document/comment/thread content.
     ...(ccUntrustedSkills !== null ? [`[untrusted unblessed skill]\n${ccUntrustedSkills}`] : []),
-    ...(await buildUntrustedContext(ctx)).map(
+    ...taskMessages.map(
       (m) =>
         `${m.role === 'assistant' ? '[prior assistant output]' : '[document / user input]'}\n${m.content}`,
     ),
