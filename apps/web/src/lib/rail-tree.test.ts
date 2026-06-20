@@ -113,6 +113,52 @@ describe('buildRailTree', () => {
     expect(views.find((v) => v.label === 'Not match')!.active).toBe(false);
   });
 
+  it('highlights the DEFAULT view when on the table with no explicit ?view= param', () => {
+    // Regression: landing on a table shows its default view, but with no
+    // `?view=` in the URL no row was highlighted — you couldn't tell which
+    // view you were on. The default (then first) view of the CURRENT table
+    // must light up.
+    const tree = buildRailTree({
+      projects: [{ slug: 'sales', name: 'Acme Sales' }],
+      tablesByProject: { sales: [{ id: 't1', slug: 'work-items', name: 'Work Items' }] },
+      viewsByTable: {
+        t1: [
+          { id: 'v1', name: 'Custom', type: 'list', isDefault: false, order: 0 },
+          { id: 'v2', name: 'Default', type: 'list', isDefault: true, order: 10 },
+        ],
+      },
+      // on the table, but NO viewId in the route
+      currentRoute: { wslug: 'acme', pslug: 'sales', tslug: 'work-items' },
+      handlers: noopHandlers,
+    });
+    const views = tree[0].children![0].children!;
+    expect(views.find((v) => v.label === 'Default')!.active).toBe(true);
+    expect(views.find((v) => v.label === 'Custom')!.active).toBe(false);
+  });
+
+  it('does NOT highlight a default view of a table the route is not on', () => {
+    const tree = buildRailTree({
+      projects: [{ slug: 'sales', name: 'Acme Sales' }],
+      tablesByProject: {
+        sales: [
+          { id: 't1', slug: 'work-items', name: 'Work Items' },
+          { id: 't2', slug: 'bugs', name: 'Bugs' },
+        ],
+      },
+      viewsByTable: {
+        t1: [{ id: 'v1', name: 'WI Default', type: 'list', isDefault: true, order: 0 }],
+        t2: [{ id: 'v2', name: 'Bugs Default', type: 'list', isDefault: true, order: 0 }],
+      },
+      // on the bugs table — work-items' default must NOT light up
+      currentRoute: { wslug: 'acme', pslug: 'sales', tslug: 'bugs' },
+      handlers: noopHandlers,
+    });
+    const wiViews = tree[0].children!.find((t) => t.label === 'Work Items')!.children!;
+    const bugViews = tree[0].children!.find((t) => t.label === 'Bugs')!.children!;
+    expect(wiViews[0].active).toBe(false);
+    expect(bugViews[0].active).toBe(true);
+  });
+
   it('wiki leaf is active when the current route is the project wiki', () => {
     const onWikiClick = () => {};
     const tree = buildRailTree({

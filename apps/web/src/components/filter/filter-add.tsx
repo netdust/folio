@@ -7,12 +7,12 @@ import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
 interface Props {
   statuses: Status[];
-  pinnedFields: Field[];
+  filterableFields: Field[];
   existing: FilterClauseUrl[];
   onAdd: (clause: FilterClauseUrl) => void;
 }
 
-export function FilterAdd({ statuses, pinnedFields, existing, onAdd }: Props) {
+export function FilterAdd({ statuses, filterableFields, existing, onAdd }: Props) {
   const [open, setOpen] = useState(false);
   const [pickedKey, setPickedKey] = useState<string | null>(null);
 
@@ -25,13 +25,34 @@ export function FilterAdd({ statuses, pinnedFields, existing, onAdd }: Props) {
 
   const offerStatus = !usedKinds.has('status') && statuses.length > 0;
   const offerPriority =
-    !usedKinds.has('priority') && pinnedFields.some((f) => f.key === 'priority');
-  const offerLabels = !usedKinds.has('labels') && pinnedFields.some((f) => f.key === 'labels');
+    !usedKinds.has('priority') && filterableFields.some((f) => f.key === 'priority');
+  const offerLabels = !usedKinds.has('labels') && filterableFields.some((f) => f.key === 'labels');
   const offerAssignee = !usedKinds.has('assignee');
   const offerUpdated = !usedKinds.has('updated_since');
 
-  const priorityField = pinnedFields.find((f) => f.key === 'priority');
-  const labelsField = pinnedFields.find((f) => f.key === 'labels');
+  const priorityField = filterableFields.find((f) => f.key === 'priority');
+  const labelsField = filterableFields.find((f) => f.key === 'labels');
+
+  // Generic custom-field filters: every pinned field that is NOT already covered
+  // by a built-in kind (priority/labels keep their bespoke pickers) and is not
+  // already in use. `title`/`status` are columns, not frontmatter fields — they
+  // never appear in `filterableFields`. The op is derived from the field type.
+  const usedFieldKeys = new Set(
+    existing.filter((e) => e.kind === 'field').map((e) => (e as { key: string }).key),
+  );
+  const BUILT_IN_FIELD_KEYS = new Set(['priority', 'labels']);
+  const fieldOptions = filterableFields.filter(
+    (f) => !BUILT_IN_FIELD_KEYS.has(f.key) && !usedFieldKeys.has(f.key),
+  );
+  const opFor = (type: string): '$eq' | '$contains' =>
+    type === 'multi_select' ? '$contains' : '$eq';
+  // The value type the clause must coerce to so it matches the typed JSON data
+  // (a boolean field stored as `true` won't match the string "true").
+  const valueTypeFor = (type: string): 'string' | 'number' | 'boolean' =>
+    type === 'boolean' ? 'boolean' : type === 'number' || type === 'currency' ? 'number' : 'string';
+  const pickedField = pickedKey?.startsWith('field:')
+    ? filterableFields.find((f) => f.key === pickedKey.slice('field:'.length))
+    : undefined;
 
   return (
     <Popover
@@ -66,10 +87,37 @@ export function FilterAdd({ statuses, pinnedFields, existing, onAdd }: Props) {
                 onClick={() => setPickedKey('updated_since')}
               />
             ) : null}
-            {!offerStatus && !offerPriority && !offerLabels && !offerAssignee && !offerUpdated ? (
+            {fieldOptions.map((f) => (
+              <Pick
+                key={f.key}
+                label={f.label ?? f.key}
+                hint={f.type === 'multi_select' ? 'has' : 'is'}
+                onClick={() => setPickedKey(`field:${f.key}`)}
+              />
+            ))}
+            {!offerStatus &&
+            !offerPriority &&
+            !offerLabels &&
+            !offerAssignee &&
+            !offerUpdated &&
+            fieldOptions.length === 0 ? (
               <li className="px-2 py-1.5 text-xs text-fg-3">All filters in use.</li>
             ) : null}
           </ul>
+        ) : pickedField ? (
+          <FieldValuePicker
+            field={pickedField}
+            onPick={(value) => {
+              onAdd({
+                kind: 'field',
+                key: pickedField.key,
+                op: opFor(pickedField.type),
+                value,
+                valueType: valueTypeFor(pickedField.type),
+              });
+              close();
+            }}
+          />
         ) : pickedKey === 'status' ? (
           <ul className="flex flex-col">
             {statuses.map((s) => (
@@ -131,6 +179,29 @@ export function FilterAdd({ statuses, pinnedFields, existing, onAdd }: Props) {
       </PopoverContent>
     </Popover>
   );
+}
+
+/** The value step for a generic field filter — option-list for select-like
+ *  fields, true/false for boolean, free text otherwise. */
+function FieldValuePicker({ field, onPick }: { field: Field; onPick: (v: string) => void }) {
+  if ((field.type === 'select' || field.type === 'multi_select') && field.options?.length) {
+    return (
+      <ul className="flex flex-col">
+        {field.options.map((opt) => (
+          <Pick key={opt} label={opt} onClick={() => onPick(opt)} />
+        ))}
+      </ul>
+    );
+  }
+  if (field.type === 'boolean') {
+    return (
+      <ul className="flex flex-col">
+        <Pick label="true" onClick={() => onPick('true')} />
+        <Pick label="false" onClick={() => onPick('false')} />
+      </ul>
+    );
+  }
+  return <FreeInput placeholder={`${field.label ?? field.key}…`} onSubmit={onPick} />;
 }
 
 function Pick({

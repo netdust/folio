@@ -49,6 +49,57 @@ describe('useViewFilterHydration', () => {
     expect((arg.search as Record<string, unknown>).status).toBe('In Progress');
   });
 
+  it("hydrates a view's saved GENERIC field filter ($eq) into f_<key>", () => {
+    const navigate = vi.fn();
+    renderHook(() =>
+      useViewFilterHydration(
+        view({ filters: { role: { $eq: 'performer' } } }),
+        {},
+        navigate,
+        undefined,
+      ),
+    );
+    const [arg] = navigate.mock.calls[0];
+    expect((arg.search as Record<string, unknown>).f_role).toBe('eq:s:performer');
+  });
+
+  it("hydrates a view's saved GENERIC field filter ($contains) into f_<key>=has:", () => {
+    const navigate = vi.fn();
+    renderHook(() =>
+      useViewFilterHydration(
+        view({ filters: { diet_tags: { $contains: ['veggie'] } } }),
+        {},
+        navigate,
+        undefined,
+      ),
+    );
+    const [arg] = navigate.mock.calls[0];
+    expect((arg.search as Record<string, unknown>).f_diet_tags).toBe('has:s:veggie');
+  });
+
+  it('hydrates a saved BOOLEAN field filter with the bool type tag (drives=true reload)', () => {
+    const navigate = vi.fn();
+    renderHook(() =>
+      useViewFilterHydration(view({ filters: { drives: { $eq: true } } }), {}, navigate, undefined),
+    );
+    const [arg] = navigate.mock.calls[0];
+    expect((arg.search as Record<string, unknown>).f_drives).toBe('eq:b:true');
+  });
+
+  it('hydrates a saved NUMBER field filter with the number type tag', () => {
+    const navigate = vi.fn();
+    renderHook(() =>
+      useViewFilterHydration(
+        view({ filters: { headcount: { $eq: 12 } } }),
+        {},
+        navigate,
+        undefined,
+      ),
+    );
+    const [arg] = navigate.mock.calls[0];
+    expect((arg.search as Record<string, unknown>).f_headcount).toBe('eq:n:12');
+  });
+
   it("honors a view's $in AST filter as an array", () => {
     const navigate = vi.fn();
     renderHook(() =>

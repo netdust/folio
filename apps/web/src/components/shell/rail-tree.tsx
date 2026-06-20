@@ -71,7 +71,18 @@ function RailDndRoot({
   children,
   onReorder,
 }: { children: React.ReactNode; onReorder?: ReorderFn }) {
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  // Click-vs-drag on the SAME row: view rows are both clickable (navigate) and
+  // draggable (reorder). A pure distance constraint still let the PointerSensor
+  // capture the pointerdown, and because a view click rebuilds the rail tree
+  // (activeViewId flows into the NavItem useMemo), the row could unmount mid-
+  // interaction before the synthetic `click` fired — the "sometimes I have to
+  // click twice" bug. A small press `delay` with a movement `tolerance` makes a
+  // quick tap unambiguously a click (the sensor never engages), while a
+  // deliberate press-and-hold still starts a drag. tolerance>0 lets the finger/
+  // mouse jitter during the delay without being treated as a drag.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { delay: 150, tolerance: 5 } }),
+  );
   const onDragEnd = (e: DragEndEvent) => {
     const active = String(e.active.id);
     const over = e.over ? String(e.over.id) : null;

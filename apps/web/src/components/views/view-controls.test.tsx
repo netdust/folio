@@ -103,7 +103,12 @@ vi.mock('../../lib/api/documents.ts', async () => {
   const actual = await vi.importActual<typeof import('../../lib/api/documents.ts')>(
     '../../lib/api/documents.ts',
   );
-  return { ...actual, useUpdateDocument: () => ({ mutate: updateDocumentMutateSpy }) };
+  return {
+    ...actual,
+    useUpdateDocument: () => ({ mutate: updateDocumentMutateSpy }),
+    // The filter bar samples docs to infer un-pinned columns; stub it inert.
+    useDocuments: () => ({ data: { data: [] } }),
+  };
 });
 
 // The board bus is module-global; stub it so BoardControls (the kanban slot) is

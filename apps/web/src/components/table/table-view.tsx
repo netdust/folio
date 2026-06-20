@@ -321,11 +321,12 @@ export function TableView({ wslug, pslug, tslug }: Props) {
 
   // Pin handler for the ColumnPicker's "Suggested from your data" rows. We
   // reuse `onAddColumn` so the POST + visible-fields update path is identical
-  // to the manual `+ Add column` flow. Suggestions never carry options
-  // (select/currency can't be inferred from a single sample), so the
-  // AddColumnPayload's `options` field is naturally omitted.
+  // to the manual `+ Add column` flow. A `multi_select` suggestion (array-
+  // valued frontmatter) carries `options` derived from the data's distinct
+  // members — the server requires non-empty options for multi_select, so
+  // forwarding them keeps the pin from 422-ing. Scalar suggestions omit it.
   const onPinSuggestion = useCallback(
-    async (payload: { key: string; type: FieldType; label: string }) => {
+    async (payload: { key: string; type: FieldType; label: string; options?: string[] }) => {
       await onAddColumn(payload);
     },
     [onAddColumn],

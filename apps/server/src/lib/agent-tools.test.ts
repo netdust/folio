@@ -657,6 +657,52 @@ describe('D-2: read/write/comment tools via executeTool', () => {
     expect(doc.type).toBe('work_item');
   });
 
+  it('list_documents scopes to table_slug — and does NOT bleed other tables in', async () => {
+    // Regression: list_documents only applied table scoping when type==='work_item'
+    // was ALSO passed, so `list_documents({ table_slug })` alone silently
+    // ignored the table and returned EVERY table's docs mixed together.
+    // table_slug must scope on its own.
+    const { db, seed } = await makeTestApp();
+    const cfg = await seedHumanPat(db, seed.workspace.id, seed.user.id, [
+      'config:write',
+      'documents:write',
+      'documents:read',
+    ]);
+    // Second table alongside the seeded `work-items`.
+    await exec(cfg, seed.user.id, 'folio_api', {
+      method: 'POST',
+      path: '/api/v1/w/acme/p/web/tables',
+      body: { name: 'People' },
+    });
+    // One doc in each table.
+    await exec(cfg, seed.user.id, 'create_document', {
+      workspace_slug: 'acme',
+      project_slug: 'web',
+      type: 'work_item',
+      title: 'A work item',
+    });
+    await exec(cfg, seed.user.id, 'create_document', {
+      workspace_slug: 'acme',
+      project_slug: 'web',
+      table_slug: 'people',
+      type: 'work_item',
+      title: 'A person',
+    });
+
+    // table_slug WITHOUT an explicit type must still scope to that table.
+    const out = (await exec(cfg, seed.user.id, 'list_documents', {
+      workspace_slug: 'acme',
+      project_slug: 'web',
+      table_slug: 'people',
+    })) as { content: { text: string }[] };
+    const parsed = JSON.parse(out.content[0]!.text) as {
+      documents: { title: string }[];
+    };
+    const titles = parsed.documents.map((d) => d.title);
+    expect(titles).toContain('A person');
+    expect(titles).not.toContain('A work item');
+  });
+
   it('create_comment posts on a work_item (comment happy path)', async () => {
     const { db, seed } = await makeTestApp();
     const writeTok = await seedHumanPat(db, seed.workspace.id, seed.user.id, ['documents:write']);

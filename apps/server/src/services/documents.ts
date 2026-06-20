@@ -231,12 +231,14 @@ export async function listDocuments(
     // documents — exclude from the generic default listing (agent-ergonomics).
     whereClauses.push(ne(documents.type, 'comment'));
   }
-  // Table-scoping rules: work_items use the active table; pages, agents, and
-  // triggers are project-scoped (tableId IS NULL is enforced at write time).
-  if (opts.type === 'work_item') {
-    if (opts.activeTableId) {
-      whereClauses.push(eq(documents.tableId, opts.activeTableId));
-    }
+  // Table-scoping rules. When the caller resolved an active table, scope to it
+  // regardless of `type` — a table holds only work_items (pages carry a null
+  // tableId), so this naturally yields that table's work_items. Previously this
+  // was gated on type==='work_item', so a table-scoped listing with no explicit
+  // type silently ignored the table and bled in every other table's docs.
+  // pages stay project-scoped (tableId IS NULL).
+  if (opts.activeTableId) {
+    whereClauses.push(eq(documents.tableId, opts.activeTableId));
   } else if (opts.type === 'page') {
     whereClauses.push(isNull(documents.tableId));
   }

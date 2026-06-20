@@ -129,7 +129,7 @@ function RailExpanded({
   onToggle,
 }: RailProps & { onToggle: () => void }) {
   return (
-    <aside className="flex w-[200px] flex-col rounded-xl bg-content shadow-surface px-3 py-3.5">
+    <aside className="flex h-full min-h-0 w-[200px] flex-col rounded-xl bg-content shadow-surface px-3 py-3.5">
       <div className="px-2 mb-3 text-[11px] font-medium tracking-wide text-fg-3 uppercase">
         {brand.label}
       </div>
@@ -137,9 +137,12 @@ function RailExpanded({
       <WorkspaceButton workspace={workspace} />
 
       <Divider />
-      <NavList items={primary} expanded onReorder={onReorder} />
-
-      <div className="flex-1" />
+      {/* The project/table/view tree grows unbounded; it owns the flex-1 slot
+          and scrolls (min-h-0 lets it shrink below content height) so the
+          tools/account/user footer below stays pinned and reachable. */}
+      <div className="flex-1 min-h-0 overflow-y-auto folio-scroll">
+        <NavList items={primary} expanded onReorder={onReorder} />
+      </div>
 
       {tools && tools.length > 0 ? (
         <>

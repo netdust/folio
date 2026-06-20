@@ -342,7 +342,21 @@ export type FilterClauseUrl =
   | { kind: 'priority'; value: string }
   | { kind: 'labels'; values: string[] }
   | { kind: 'assignee'; value: string }
-  | { kind: 'updated_since'; value: string };
+  | { kind: 'updated_since'; value: string }
+  // A generic filter on ANY frontmatter field. `op` is derived from the field
+  // type at add-time: `$eq` for scalar (select/string/boolean/date/number),
+  // `$contains` for array (multi_select/labels). `value` is captured as a string
+  // (pickers + URLs are strings); `valueType` records the field's value type so
+  // the filter is coerced to match the typed data — a boolean field stored as
+  // `true` does NOT match the string "true", nor a number `12` the string "12".
+  // Multiple field clauses on different keys coexist (keyed by `key`, not `kind`).
+  | {
+      kind: 'field';
+      key: string;
+      op: '$eq' | '$contains';
+      value: string;
+      valueType?: 'string' | 'number' | 'boolean';
+    };
 
 export function parseFilters(search: Record<string, unknown>): FilterClauseUrl[] {
   const out: FilterClauseUrl[] = [];
@@ -356,7 +370,95 @@ export function parseFilters(search: Record<string, unknown>): FilterClauseUrl[]
   if (assignee) out.push({ kind: 'assignee', value: assignee });
   const us = str(search.updated_since);
   if (us) out.push({ kind: 'updated_since', value: us });
+  // Generic field filters live under `f_<key>` URL params, value-encoded as
+  // `<op>:<typeTag>:<value>` — op ∈ eq|has, typeTag ∈ s|n|b (string/number/
+  // boolean). Self-contained: the type travels in the URL so a reloaded
+  // boolean/number filter still coerces correctly (no field lookup at parse).
+  for (const [param, raw] of Object.entries(search)) {
+    if (!param.startsWith('f_')) continue;
+    const encoded = str(raw);
+    if (!encoded) continue;
+    const key = param.slice(2);
+    if (!key) continue;
+    const decoded = decodeFieldFilterValue(encoded);
+    if (!decoded.value) continue;
+    out.push({ kind: 'field', key, op: decoded.op, value: decoded.value, valueType: decoded.type });
+  }
   return out;
+}
+
+const TYPE_TAG: Record<'string' | 'number' | 'boolean', string> = {
+  string: 's',
+  number: 'n',
+  boolean: 'b',
+};
+const TAG_TYPE: Record<string, 'string' | 'number' | 'boolean'> = {
+  s: 'string',
+  n: 'number',
+  b: 'boolean',
+};
+
+/** Decode a field-filter URL value `<op>:<typeTag>:<value>` (back-compat: a
+ *  bare `eq:<value>` or `<value>` defaults to op=eq, type=string). */
+function decodeFieldFilterValue(encoded: string): {
+  op: '$eq' | '$contains';
+  type: 'string' | 'number' | 'boolean';
+  value: string;
+} {
+  const parts = encoded.split(':');
+  const [opPart, tagPart] = parts;
+  // Full form: op:tag:value (value may itself contain ':', so rejoin the tail).
+  if (
+    parts.length >= 3 &&
+    (opPart === 'eq' || opPart === 'has') &&
+    tagPart &&
+    tagPart in TAG_TYPE
+  ) {
+    return {
+      op: opPart === 'has' ? '$contains' : '$eq',
+      type: TAG_TYPE[tagPart]!,
+      value: parts.slice(2).join(':'),
+    };
+  }
+  // Legacy form: op:value (string-typed) or bare value.
+  const sep = encoded.indexOf(':');
+  const opTag = sep > 0 ? encoded.slice(0, sep) : 'eq';
+  const value = sep > 0 ? encoded.slice(sep + 1) : encoded;
+  return { op: opTag === 'has' ? '$contains' : '$eq', type: 'string', value };
+}
+
+/**
+ * Coerce a filter value (always captured as a string) to the field's real value
+ * type, so it matches the typed JSON data. `"true"` → `true`, `"12"` → `12`. A
+ * non-numeric string under `number` falls back to the raw string (the server
+ * just won't match, which is correct — no crash). Unknown/string type → string.
+ */
+export function coerceFilterValue(
+  value: string,
+  valueType: 'string' | 'number' | 'boolean' | undefined,
+): string | number | boolean {
+  if (valueType === 'boolean') return value === 'true';
+  if (valueType === 'number') {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : value;
+  }
+  return value;
+}
+
+/** The URL param name for a generic field filter on `key`. */
+export function fieldFilterParam(key: string): string {
+  return `f_${key}`;
+}
+
+/** Encode a field clause's URL value as `<op>:<typeTag>:<value>` so parseFilters
+ *  is self-contained AND the value type survives a reload (boolean/number
+ *  filters must coerce the same way after a round-trip). */
+export function fieldFilterValue(
+  op: '$eq' | '$contains',
+  value: string,
+  valueType: 'string' | 'number' | 'boolean' = 'string',
+): string {
+  return `${op === '$contains' ? 'has' : 'eq'}:${TYPE_TAG[valueType]}:${value}`;
 }
 
 /**
@@ -384,6 +486,14 @@ export function clausesToFilterJson(
     // labels → $contains AND-membership (every selected label must be present),
     // matching the prior client-side AND-of-contains semantics.
     if (c.kind === 'labels') filter.labels = { $contains: c.values };
+    // A generic field clause compiles straight to the server AST on its key:
+    // $eq for scalar fields, $contains (single-member array) for multi_select.
+    // Coerce the captured string to the field's real value type so it matches
+    // the typed JSON data (boolean true ≠ "true", number 12 ≠ "12").
+    if (c.kind === 'field') {
+      const coerced = coerceFilterValue(c.value, c.valueType);
+      filter[c.key] = c.op === '$contains' ? { $contains: [coerced] } : { $eq: coerced };
+    }
   }
   return Object.keys(filter).length > 0 ? filter : undefined;
 }

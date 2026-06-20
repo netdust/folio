@@ -1,12 +1,20 @@
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
-import { type FilterClauseUrl, parseFilters } from '../../lib/api/documents.ts';
+import {
+  type FilterClauseUrl,
+  coerceFilterValue,
+  fieldFilterParam,
+  fieldFilterValue,
+  parseFilters,
+  useDocuments,
+} from '../../lib/api/documents.ts';
 import { type Field, useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
 import { useActiveView } from '../../lib/api/use-active-view.ts';
 import { useUpdateView } from '../../lib/api/views.ts';
 import { FilterBar } from '../filter/filter-bar.tsx';
+import { filterableFields } from '../filter/filterable-fields.ts';
 import { BoardControls } from '../kanban/board-controls.tsx';
 import { ListControls } from './list-controls.tsx';
 import { useViewFilterHydration } from './use-view-filter-hydration.ts';
@@ -64,6 +72,16 @@ export function ViewControls({ wslug, pslug, tslug }: Props) {
   const { data: fields } = useFields(wslug, pslug, tslug);
   const updateView = useUpdateView(wslug, pslug, tslug);
 
+  // A doc sample so the filter bar can offer ANY column the table shows — not
+  // just formally-pinned fields. Un-pinned frontmatter keys get a synthesized
+  // filterable field with its type inferred from the data (filterableFields).
+  // limit:100 is plenty to discover the table's column set; type:work_item
+  // scopes to this table's rows.
+  const { data: sample } = useDocuments(wslug, pslug, tslug, {
+    type: 'work_item',
+    limit: 100,
+  });
+
   const urlViewId = typeof search.view === 'string' ? search.view : undefined;
 
   // Load the active view's saved filter on switch — shared with TableView so
@@ -80,6 +98,11 @@ export function ViewControls({ wslug, pslug, tslug }: Props) {
     const flatFilters: Record<string, unknown> = {};
     for (const k of ['status', 'priority', 'labels', 'assignee', 'updated_since']) {
       delete nextSearch[k];
+    }
+    // Drop every stale generic field-filter param (f_<key>) before re-applying
+    // the current set — removing a field filter must clear its URL param.
+    for (const k of Object.keys(nextSearch)) {
+      if (k.startsWith('f_')) delete nextSearch[k];
     }
     for (const c of next) {
       if (c.kind === 'status') {
@@ -102,6 +125,15 @@ export function ViewControls({ wslug, pslug, tslug }: Props) {
         nextSearch.updated_since = c.value;
         flatFilters.updated_since = c.value;
       }
+      if (c.kind === 'field') {
+        // URL: op+type-tagged value under f_<key> (the type survives reload so
+        // boolean/number filters coerce the same way). View persistence: the
+        // server AST shape with the value COERCED to its real type (clausesTo-
+        // FilterJson does this for the live query; mirror it for the saved view).
+        nextSearch[fieldFilterParam(c.key)] = fieldFilterValue(c.op, c.value, c.valueType);
+        const coerced = coerceFilterValue(c.value, c.valueType);
+        flatFilters[c.key] = c.op === '$contains' ? { $contains: [coerced] } : { $eq: coerced };
+      }
     }
     void navigate({ to: '.', search: nextSearch, replace: false });
     // Persist the filter to the active view WHENEVER one is resolved — including
@@ -122,6 +154,8 @@ export function ViewControls({ wslug, pslug, tslug }: Props) {
   if (!activeView) return null;
 
   const allFields = fields ?? [];
+  // Pinned fields + inferred columns from the data → the full filterable set.
+  const filterFields = filterableFields(allFields, sample?.data ?? []);
 
   // INVARIANT 16: calendar/timeline field + zoom are VIEW config — every change
   // PATCHes the view's settings (merged over the saved settings so siblings are
@@ -138,7 +172,7 @@ export function ViewControls({ wslug, pslug, tslug }: Props) {
       <FilterBar
         clauses={clauses}
         statuses={statuses ?? []}
-        pinnedFields={allFields}
+        filterableFields={filterFields}
         onChange={onFilterChange}
       />
       {renderSettingsSlot()}

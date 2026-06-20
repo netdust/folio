@@ -200,7 +200,7 @@ create_document  { workspace_slug, project_slug, table_slug:"bugs", type:"work_i
 
 - **Frontmatter is the schema.** Only \`title\`, \`status\`, and \`body\` are real columns. EVERYTHING else (\`priority\`, \`assignee\`, \`due_date\`, \`labels\`, anything custom) lives in the document's frontmatter JSON. To "add a field" you simply write that key into frontmatter — no migration.
 - **snake_case** for all frontmatter keys (\`due_date\`, not \`dueDate\`).
-- **Field types are inferred from values** on read. To pin a type explicitly (so the UI renders it consistently), create a row in the project's \`fields\` table via \`folio_api\`.
+- **Field types are inferred from values** on read. To pin a type explicitly (so the UI renders it consistently), create a row in the project's \`fields\` table via \`folio_api\`. **Type CHANGES are restricted: \`string → select\`/\`multi_select\` is REJECTED (422 \`INVALID_TYPE_CHANGE\`; allowed changes are \`string ↔ text\`, \`number ↔ currency\`, \`any → text\`). To convert a string field to a select, DELETE the field pin and re-create it with \`type: "select"\` + \`options\`. Deleting a field pin does NOT delete the underlying frontmatter values (the pin is only a type hint) — but the existing values must already match the new options, so migrate the documents' frontmatter to the canonical option values first.** \`select\`/\`multi_select\` require a non-empty \`options\` array.
 - **Two document types:**
   - \`work_item\` — a kanban-able task. Requires a table (work items live in a project's table).
   - \`page\` — wiki-style long-form. Project-scoped.
@@ -277,11 +277,11 @@ Design views to the request, don't just drop one kanban: a bug tracker wants a k
 A view is a saved, typed lens over a table. \`POST\`/\`PATCH\` \`/api/v1/w/<wslug>/p/<pslug>/views\` (config:write, risk-gated). The body fields:
 
 - **\`name\`** (required, 1-80 chars).
-- **\`type\`** (required) — the renderer, EXACTLY one of: \`table\` | \`list\` | \`kanban\` | \`calendar\` | \`timeline\` | \`gallery\`. (NOT "board" — that 400s the Zod enum.) The type IS the render mode; there is no separate route per type.
+- **\`type\`** (required) — the renderer, EXACTLY one of: \`table\` | \`list\` | \`kanban\` | \`calendar\` | \`timeline\`. (NOT "board" — that 400s the Zod enum.) The type IS the render mode; there is no separate route per type. **\`gallery\` is accepted by the API but NOT yet implemented — it renders a "coming soon" placeholder, so do NOT create gallery views.** For a visual people/card listing use \`table\` or \`list\`.
 - **\`filters\`** (PLURAL — \`filter\` singular is an unknown field and 400s). A FilterAST object, NOT flat key/value. Operators: \`$eq\`, \`$ne\`, \`$gt\`, \`$gte\`, \`$lt\`, \`$lte\`, \`$in\`, \`$nin\`, \`$contains\`; combine with \`$and\`/\`$or\`. Keys are frontmatter field keys. Invalid filters 422 (\`INVALID_FILTER\`). The seeded default work-item filter is \`{ "type": { "$eq": "work_item" } }\`. Example "high priority assigned to me": \`{ "$and": [ { "priority": { "$eq": "high" } }, { "assignee": { "$eq": "me" } } ] }\`.
 - **\`sort\`** — an ARRAY of \`{ "key": <fieldKey>, "dir": "asc" | "desc" }\` (NOT a single field string). E.g. \`[ { "key": "updated_at", "dir": "desc" } ]\`.
-- **\`groupBy\`** — a field key (top-level, NOT \`config.group_by\`). Required-in-spirit for a \`kanban\` (it's the column axis, e.g. \`"status"\`); optional elsewhere.
-- **\`visibleFields\`** — an ARRAY of field keys to show, in nothing-special order, e.g. \`["title","status","priority","assignee","due_date","updated_at"]\`. Omit/\`[]\` = sensible defaults. These are frontmatter KEYS, not ids.
+- **\`groupBy\`** — a field key (top-level, NOT \`config.group_by\`). Required-in-spirit for a \`kanban\` (it's the column axis, e.g. \`"status"\`); optional elsewhere. **Only group by a SINGLE-VALUE field (\`select\`/\`string\`/\`boolean\`/\`date\`/\`status\`). Grouping by a \`multi_select\` buckets by the WHOLE array value (\`["veggie","vis"]\` becomes one literal group), NOT one bucket per tag — so it does not give clean per-value groups.** To answer "who/what has tag X", use a filtered view instead: \`"filters": { "<key>": { "$contains": "X" } }\`.
+- **\`visibleFields\`** — an ARRAY of field keys to show, in nothing-special order, e.g. \`["title","status","priority","assignee","due_date","updated_at"]\`. Omit/\`[]\` = sensible defaults. These are frontmatter KEYS, not ids. **\`columnOrder\` only orders columns that are in \`visibleFields\` — it does NOT make a column appear. If you want the document NAME shown, \`title\` MUST be in \`visibleFields\` (a table/list with no \`title\` shows rows with no name). Putting \`title\` only in \`columnOrder\` does nothing.** (\`kanban\`/\`calendar\`/\`timeline\` render the title on the card intrinsically, so they don't need it in \`visibleFields\`.)
 - **\`columnOrder\`** — an array of field keys giving left-to-right column order (table/list).
 - **\`settings\`** — a freeform per-type config object. The one that matters today: a \`calendar\` view needs the date field via \`settings\`, e.g. \`{ "dateField": "due_date" }\`; a \`timeline\` similarly keys off a date field.
 - **\`order\`** — integer, the view's position in the rail (lower = earlier).
@@ -310,7 +310,7 @@ folio_api  POST /api/v1/w/<wslug>/p/marketing/views
   { "name": "Schedule", "type": "calendar", "settings": { "dateField": "due_date" } }
 \`\`\`
 
-\`list\`, \`timeline\`, and \`gallery\` use the same body shape — set \`type\` accordingly (a \`timeline\` keys off a date field via \`settings\` like \`calendar\`; \`gallery\`/\`list\` mainly use \`filters\`/\`sort\`/\`visibleFields\`).
+\`list\` and \`timeline\` use the same body shape — set \`type\` accordingly (a \`timeline\` keys off a date field via \`settings\` like \`calendar\`; \`list\` mainly uses \`filters\`/\`sort\`/\`visibleFields\`/\`groupBy\`). (\`gallery\` is not implemented — see the \`type\` note above.)
 
 Preview first if unsure — add \`"dryRun": true\` to the body and read back \`would\`.
 
