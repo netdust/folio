@@ -561,7 +561,7 @@ export function registerRealTools(): void {
   registerTool({
     name: 'list_documents',
     description:
-      'List documents in a project. Returns work_item + page only. Comments → list_comments; runs → list_runs. Optional type filter and pagination.',
+      'List documents in a project. Returns work_item + page only. Comments → list_comments; runs → list_runs. Pass `table_slug` to scope to ONE table (e.g. just the "people" table) — it now scopes on its own, you do NOT also need type=work_item. Without table_slug a work_item listing pins to the project default table. Optional type filter and pagination.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -597,8 +597,15 @@ export function registerRealTools(): void {
           { reason: 'agent_run_wrong_endpoint' },
         );
       }
+      // Table scoping: honor `table_slug` whenever it is supplied, regardless of
+      // `type`. Previously this only fired for type==='work_item', so a caller
+      // passing `table_slug` alone (no type) had the table SILENTLY ignored and
+      // got every table's docs mixed together. We also keep the default-table
+      // pin for a bare work_item list (no table_slug) — matching the HTTP route
+      // + folio skill contract. Pages carry a null tableId, so a table filter
+      // correctly excludes them.
       let activeTableId: string | null = null;
-      if (type === 'work_item') {
+      if (optionalString(args, 'table_slug') !== undefined || type === 'work_item') {
         const t = await resolveTableForArgs(p, args);
         activeTableId = t.id;
       }
