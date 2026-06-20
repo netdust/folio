@@ -98,7 +98,7 @@ describe('FilterBar', () => {
     await userEvent.click(await screen.findByText('Role'));
     await userEvent.click(await screen.findByText('performer'));
     expect(onChange).toHaveBeenCalledWith([
-      { kind: 'field', key: 'role', op: '$eq', value: 'performer' },
+      { kind: 'field', key: 'role', op: '$eq', value: 'performer', valueType: 'string' },
     ]);
   });
 
@@ -125,7 +125,36 @@ describe('FilterBar', () => {
     await userEvent.click(await screen.findByText('Diet'));
     await userEvent.click(await screen.findByText('veggie'));
     expect(onChange).toHaveBeenCalledWith([
-      { kind: 'field', key: 'diet_tags', op: '$contains', value: 'veggie' },
+      { kind: 'field', key: 'diet_tags', op: '$contains', value: 'veggie', valueType: 'string' },
+    ]);
+  });
+
+  it('a boolean field offers true/false and adds a boolean-typed clause', async () => {
+    const onChange = vi.fn();
+    const drivesField = {
+      id: 'f-drives',
+      key: 'drives',
+      type: 'boolean' as const,
+      label: 'Drives',
+      options: null,
+      required: false,
+      order: 0,
+    };
+    render(
+      <FilterBar
+        clauses={[]}
+        statuses={STATUSES}
+        filterableFields={[drivesField]}
+        onChange={onChange}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: /Filter/ }));
+    await userEvent.click(await screen.findByText('Drives'));
+    await userEvent.click(await screen.findByText('true'));
+    // valueType:'boolean' is what makes clausesToFilterJson coerce to a real
+    // boolean — the drives=true-returns-nothing bug.
+    expect(onChange).toHaveBeenCalledWith([
+      { kind: 'field', key: 'drives', op: '$eq', value: 'true', valueType: 'boolean' },
     ]);
   });
 

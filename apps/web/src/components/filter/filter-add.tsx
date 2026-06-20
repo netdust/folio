@@ -46,6 +46,10 @@ export function FilterAdd({ statuses, filterableFields, existing, onAdd }: Props
   );
   const opFor = (type: string): '$eq' | '$contains' =>
     type === 'multi_select' ? '$contains' : '$eq';
+  // The value type the clause must coerce to so it matches the typed JSON data
+  // (a boolean field stored as `true` won't match the string "true").
+  const valueTypeFor = (type: string): 'string' | 'number' | 'boolean' =>
+    type === 'boolean' ? 'boolean' : type === 'number' || type === 'currency' ? 'number' : 'string';
   const pickedField = pickedKey?.startsWith('field:')
     ? filterableFields.find((f) => f.key === pickedKey.slice('field:'.length))
     : undefined;
@@ -104,7 +108,13 @@ export function FilterAdd({ statuses, filterableFields, existing, onAdd }: Props
           <FieldValuePicker
             field={pickedField}
             onPick={(value) => {
-              onAdd({ kind: 'field', key: pickedField.key, op: opFor(pickedField.type), value });
+              onAdd({
+                kind: 'field',
+                key: pickedField.key,
+                op: opFor(pickedField.type),
+                value,
+                valueType: valueTypeFor(pickedField.type),
+              });
               close();
             }}
           />

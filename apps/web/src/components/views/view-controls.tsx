@@ -2,6 +2,7 @@ import { useNavigate, useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
 import {
   type FilterClauseUrl,
+  coerceFilterValue,
   fieldFilterParam,
   fieldFilterValue,
   parseFilters,
@@ -125,11 +126,13 @@ export function ViewControls({ wslug, pslug, tslug }: Props) {
         flatFilters.updated_since = c.value;
       }
       if (c.kind === 'field') {
-        // URL: op-prefixed value under f_<key>. View persistence: the server AST
-        // shape on the bare key, so a saved view's filter round-trips through
-        // the same compiler the saved-view filters already use.
-        nextSearch[fieldFilterParam(c.key)] = fieldFilterValue(c.op, c.value);
-        flatFilters[c.key] = c.op === '$contains' ? { $contains: [c.value] } : { $eq: c.value };
+        // URL: op+type-tagged value under f_<key> (the type survives reload so
+        // boolean/number filters coerce the same way). View persistence: the
+        // server AST shape with the value COERCED to its real type (clausesTo-
+        // FilterJson does this for the live query; mirror it for the saved view).
+        nextSearch[fieldFilterParam(c.key)] = fieldFilterValue(c.op, c.value, c.valueType);
+        const coerced = coerceFilterValue(c.value, c.valueType);
+        flatFilters[c.key] = c.op === '$contains' ? { $contains: [coerced] } : { $eq: coerced };
       }
     }
     void navigate({ to: '.', search: nextSearch, replace: false });

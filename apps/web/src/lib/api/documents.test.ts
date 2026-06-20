@@ -70,34 +70,120 @@ describe('clausesToFilterJson', () => {
       org: { $eq: 'extern' },
     });
   });
+
+  // Regression: a boolean field stored as `true` (a JSON boolean) only matches
+  // the server filter when the filter value is the boolean `true`, NOT the
+  // string "true". The picker captures a string, so the clause must coerce by
+  // valueType — else `drives=true` returns ZERO rows.
+  it('coerces a boolean field clause value to a real boolean', () => {
+    const clauses: FilterClauseUrl[] = [
+      { kind: 'field', key: 'drives', op: '$eq', value: 'true', valueType: 'boolean' },
+    ];
+    expect(clausesToFilterJson(clauses)).toEqual({ drives: { $eq: true } });
+  });
+
+  it('coerces a false boolean field clause value', () => {
+    const clauses: FilterClauseUrl[] = [
+      { kind: 'field', key: 'drives', op: '$eq', value: 'false', valueType: 'boolean' },
+    ];
+    expect(clausesToFilterJson(clauses)).toEqual({ drives: { $eq: false } });
+  });
+
+  // Same class of bug for numbers: a field stored as `12` matches `12`, not "12".
+  it('coerces a number field clause value to a real number', () => {
+    const clauses: FilterClauseUrl[] = [
+      { kind: 'field', key: 'headcount', op: '$eq', value: '12', valueType: 'number' },
+    ];
+    expect(clausesToFilterJson(clauses)).toEqual({ headcount: { $eq: 12 } });
+  });
+
+  it('leaves string/select values as strings (no spurious coercion)', () => {
+    const clauses: FilterClauseUrl[] = [
+      { kind: 'field', key: 'role', op: '$eq', value: 'performer', valueType: 'string' },
+    ];
+    expect(clausesToFilterJson(clauses)).toEqual({ role: { $eq: 'performer' } });
+  });
 });
 
 describe('parseFilters round-trips generic field clauses through the URL', () => {
-  it('parses an $eq field clause from f_<key>=eq:<value>', () => {
-    const out = parseFilters({ f_role: 'eq:performer' });
-    expect(out).toContainEqual({ kind: 'field', key: 'role', op: '$eq', value: 'performer' });
+  it('parses an $eq string field clause from the typed encoding', () => {
+    const out = parseFilters({ f_role: 'eq:s:performer' });
+    expect(out).toContainEqual({
+      kind: 'field',
+      key: 'role',
+      op: '$eq',
+      value: 'performer',
+      valueType: 'string',
+    });
   });
 
-  it('parses a $contains field clause from f_<key>=has:<value>', () => {
-    const out = parseFilters({ f_diet_tags: 'has:veggie' });
+  it('parses a $contains field clause from the typed encoding', () => {
+    const out = parseFilters({ f_diet_tags: 'has:s:veggie' });
     expect(out).toContainEqual({
       kind: 'field',
       key: 'diet_tags',
       op: '$contains',
       value: 'veggie',
+      valueType: 'string',
     });
   });
 
-  it('round-trips via the encode helpers (encode → URL param → parse)', () => {
-    const param = fieldFilterParam('org');
-    const value = fieldFilterValue('$eq', 'extern');
-    const out = parseFilters({ [param]: value });
-    expect(out).toContainEqual({ kind: 'field', key: 'org', op: '$eq', value: 'extern' });
+  it('round-trips a STRING clause via the encode helpers (encode → parse → AST)', () => {
+    const out = parseFilters({
+      [fieldFilterParam('org')]: fieldFilterValue('$eq', 'extern', 'string'),
+    });
+    expect(out).toContainEqual({
+      kind: 'field',
+      key: 'org',
+      op: '$eq',
+      value: 'extern',
+      valueType: 'string',
+    });
   });
 
-  it('defaults to $eq when no op prefix is present (legacy/hand-typed URL)', () => {
+  it('round-trips a BOOLEAN clause and compiles to a real boolean filter', () => {
+    // The reload path that the drives=true bug exposed: encode → URL → parse →
+    // clausesToFilterJson MUST yield { drives: { $eq: true } }, not "true".
+    const param = fieldFilterParam('drives');
+    const value = fieldFilterValue('$eq', 'true', 'boolean');
+    const clauses = parseFilters({ [param]: value });
+    expect(clauses).toContainEqual({
+      kind: 'field',
+      key: 'drives',
+      op: '$eq',
+      value: 'true',
+      valueType: 'boolean',
+    });
+    expect(clausesToFilterJson(clauses)).toEqual({ drives: { $eq: true } });
+  });
+
+  it('round-trips a NUMBER clause and compiles to a real number filter', () => {
+    const clauses = parseFilters({
+      [fieldFilterParam('headcount')]: fieldFilterValue('$eq', '12', 'number'),
+    });
+    expect(clausesToFilterJson(clauses)).toEqual({ headcount: { $eq: 12 } });
+  });
+
+  it('back-compat: a legacy untyped value (eq:<value>) parses as a string', () => {
+    const out = parseFilters({ f_role: 'eq:performer' });
+    expect(out).toContainEqual({
+      kind: 'field',
+      key: 'role',
+      op: '$eq',
+      value: 'performer',
+      valueType: 'string',
+    });
+  });
+
+  it('back-compat: a bare value (no op) defaults to $eq string', () => {
     const out = parseFilters({ f_role: 'performer' });
-    expect(out).toContainEqual({ kind: 'field', key: 'role', op: '$eq', value: 'performer' });
+    expect(out).toContainEqual({
+      kind: 'field',
+      key: 'role',
+      op: '$eq',
+      value: 'performer',
+      valueType: 'string',
+    });
   });
 
   it('ignores non-field params and empty values', () => {

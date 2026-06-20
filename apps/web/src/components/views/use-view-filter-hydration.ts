@@ -92,18 +92,23 @@ export function useViewFilterHydration(
         nextSearch[param] = search[param];
         continue;
       }
+      // Emit `<op>:<typeTag>:<value>` so a saved boolean/number filter coerces
+      // identically after reload (typeTag s|n|b from the stored value's JS type).
+      const tagOf = (v: unknown): string =>
+        typeof v === 'boolean' ? 'b' : typeof v === 'number' ? 'n' : 's';
       if (raw && typeof raw === 'object') {
         const op = raw as Record<string, unknown>;
-        if ('$eq' in op && typeof op.$eq === 'string') nextSearch[param] = `eq:${op.$eq}`;
-        else if (
-          '$contains' in op &&
-          Array.isArray(op.$contains) &&
-          typeof op.$contains[0] === 'string'
+        if (
+          '$eq' in op &&
+          (typeof op.$eq === 'string' || typeof op.$eq === 'number' || typeof op.$eq === 'boolean')
         ) {
-          nextSearch[param] = `has:${op.$contains[0]}`;
+          nextSearch[param] = `eq:${tagOf(op.$eq)}:${op.$eq}`;
+        } else if ('$contains' in op && Array.isArray(op.$contains) && op.$contains[0] != null) {
+          const m = op.$contains[0];
+          nextSearch[param] = `has:${tagOf(m)}:${m}`;
         }
       } else if (typeof raw === 'string' && raw) {
-        nextSearch[param] = `eq:${raw}`;
+        nextSearch[param] = `eq:s:${raw}`;
       }
     }
 
