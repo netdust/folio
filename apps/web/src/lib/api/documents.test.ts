@@ -4,6 +4,9 @@ import {
   applyFrontmatterClauses,
   clausesToFilterJson,
   clausesToListParams,
+  fieldFilterParam,
+  fieldFilterValue,
+  parseFilters,
 } from './documents.ts';
 
 // Tier A — the clauses → server `?filter=` JSON builder is pure branching logic
@@ -41,6 +44,65 @@ describe('clausesToFilterJson', () => {
       priority: { $eq: 'low' },
       labels: { $contains: ['x'] },
     });
+  });
+
+  it('maps a generic field clause ($eq) to a frontmatter filter on that key', () => {
+    const clauses: FilterClauseUrl[] = [
+      { kind: 'field', key: 'role', op: '$eq', value: 'performer' },
+    ];
+    expect(clausesToFilterJson(clauses)).toEqual({ role: { $eq: 'performer' } });
+  });
+
+  it('maps a generic field clause ($contains) for a multi_select key', () => {
+    const clauses: FilterClauseUrl[] = [
+      { kind: 'field', key: 'diet_tags', op: '$contains', value: 'veggie' },
+    ];
+    expect(clausesToFilterJson(clauses)).toEqual({ diet_tags: { $contains: ['veggie'] } });
+  });
+
+  it('combines multiple generic field clauses on different keys', () => {
+    const clauses: FilterClauseUrl[] = [
+      { kind: 'field', key: 'role', op: '$eq', value: 'performer' },
+      { kind: 'field', key: 'org', op: '$eq', value: 'extern' },
+    ];
+    expect(clausesToFilterJson(clauses)).toEqual({
+      role: { $eq: 'performer' },
+      org: { $eq: 'extern' },
+    });
+  });
+});
+
+describe('parseFilters round-trips generic field clauses through the URL', () => {
+  it('parses an $eq field clause from f_<key>=eq:<value>', () => {
+    const out = parseFilters({ f_role: 'eq:performer' });
+    expect(out).toContainEqual({ kind: 'field', key: 'role', op: '$eq', value: 'performer' });
+  });
+
+  it('parses a $contains field clause from f_<key>=has:<value>', () => {
+    const out = parseFilters({ f_diet_tags: 'has:veggie' });
+    expect(out).toContainEqual({
+      kind: 'field',
+      key: 'diet_tags',
+      op: '$contains',
+      value: 'veggie',
+    });
+  });
+
+  it('round-trips via the encode helpers (encode → URL param → parse)', () => {
+    const param = fieldFilterParam('org');
+    const value = fieldFilterValue('$eq', 'extern');
+    const out = parseFilters({ [param]: value });
+    expect(out).toContainEqual({ kind: 'field', key: 'org', op: '$eq', value: 'extern' });
+  });
+
+  it('defaults to $eq when no op prefix is present (legacy/hand-typed URL)', () => {
+    const out = parseFilters({ f_role: 'performer' });
+    expect(out).toContainEqual({ kind: 'field', key: 'role', op: '$eq', value: 'performer' });
+  });
+
+  it('ignores non-field params and empty values', () => {
+    const out = parseFilters({ status: 'todo', f_: 'x', f_role: '' });
+    expect(out.some((c) => c.kind === 'field')).toBe(false);
   });
 });
 

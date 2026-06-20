@@ -342,7 +342,12 @@ export type FilterClauseUrl =
   | { kind: 'priority'; value: string }
   | { kind: 'labels'; values: string[] }
   | { kind: 'assignee'; value: string }
-  | { kind: 'updated_since'; value: string };
+  | { kind: 'updated_since'; value: string }
+  // A generic filter on ANY custom frontmatter field (a pinned `fields` key).
+  // `op` is derived from the field type at add-time: `$eq` for scalar
+  // (select/string/boolean/date), `$contains` for array (multi_select/labels).
+  // Multiple field clauses on different keys coexist (keyed by `key`, not `kind`).
+  | { kind: 'field'; key: string; op: '$eq' | '$contains'; value: string };
 
 export function parseFilters(search: Record<string, unknown>): FilterClauseUrl[] {
   const out: FilterClauseUrl[] = [];
@@ -356,7 +361,32 @@ export function parseFilters(search: Record<string, unknown>): FilterClauseUrl[]
   if (assignee) out.push({ kind: 'assignee', value: assignee });
   const us = str(search.updated_since);
   if (us) out.push({ kind: 'updated_since', value: us });
+  // Generic field filters live under `f_<key>` URL params with an op-prefixed
+  // value: `eq:<value>` (scalar) or `has:<value>` (multi_select $contains).
+  // Self-contained — no field-type lookup needed at parse time.
+  for (const [param, raw] of Object.entries(search)) {
+    if (!param.startsWith('f_')) continue;
+    const value = str(raw);
+    if (!value) continue;
+    const key = param.slice(2);
+    if (!key) continue;
+    const sep = value.indexOf(':');
+    const opTag = sep > 0 ? value.slice(0, sep) : 'eq';
+    const v = sep > 0 ? value.slice(sep + 1) : value;
+    if (!v) continue;
+    out.push({ kind: 'field', key, op: opTag === 'has' ? '$contains' : '$eq', value: v });
+  }
   return out;
+}
+
+/** The URL param name for a generic field filter on `key`. */
+export function fieldFilterParam(key: string): string {
+  return `f_${key}`;
+}
+
+/** Encode a field clause's URL value (op-prefixed so parseFilters is self-contained). */
+export function fieldFilterValue(op: '$eq' | '$contains', value: string): string {
+  return `${op === '$contains' ? 'has' : 'eq'}:${value}`;
 }
 
 /**
@@ -384,6 +414,11 @@ export function clausesToFilterJson(
     // labels → $contains AND-membership (every selected label must be present),
     // matching the prior client-side AND-of-contains semantics.
     if (c.kind === 'labels') filter.labels = { $contains: c.values };
+    // A generic field clause compiles straight to the server AST on its key:
+    // $eq for scalar fields, $contains (single-member array) for multi_select.
+    if (c.kind === 'field') {
+      filter[c.key] = c.op === '$contains' ? { $contains: [c.value] } : { $eq: c.value };
+    }
   }
   return Object.keys(filter).length > 0 ? filter : undefined;
 }
