@@ -29,7 +29,7 @@ describe('FilterBar', () => {
       <FilterBar
         clauses={[{ kind: 'status', values: ['todo'] }]}
         statuses={STATUSES}
-        pinnedFields={[]}
+        filterableFields={[]}
         onChange={onChange}
       />,
     );
@@ -46,7 +46,7 @@ describe('FilterBar', () => {
           { kind: 'priority', value: 'high' },
         ]}
         statuses={STATUSES}
-        pinnedFields={[
+        filterableFields={[
           {
             id: 'f1',
             key: 'priority',
@@ -66,7 +66,9 @@ describe('FilterBar', () => {
 
   it('Add Filter popover offers Status → status options → adds clause', async () => {
     const onChange = vi.fn();
-    render(<FilterBar clauses={[]} statuses={STATUSES} pinnedFields={[]} onChange={onChange} />);
+    render(
+      <FilterBar clauses={[]} statuses={STATUSES} filterableFields={[]} onChange={onChange} />,
+    );
     await userEvent.click(screen.getByRole('button', { name: /Filter/ }));
     await userEvent.click(await screen.findByText('Status'));
     await userEvent.click(await screen.findByText('Todo'));
@@ -85,7 +87,12 @@ describe('FilterBar', () => {
       order: 0,
     };
     render(
-      <FilterBar clauses={[]} statuses={STATUSES} pinnedFields={[roleField]} onChange={onChange} />,
+      <FilterBar
+        clauses={[]}
+        statuses={STATUSES}
+        filterableFields={[roleField]}
+        onChange={onChange}
+      />,
     );
     await userEvent.click(screen.getByRole('button', { name: /Filter/ }));
     await userEvent.click(await screen.findByText('Role'));
@@ -107,7 +114,12 @@ describe('FilterBar', () => {
       order: 0,
     };
     render(
-      <FilterBar clauses={[]} statuses={STATUSES} pinnedFields={[dietField]} onChange={onChange} />,
+      <FilterBar
+        clauses={[]}
+        statuses={STATUSES}
+        filterableFields={[dietField]}
+        onChange={onChange}
+      />,
     );
     await userEvent.click(screen.getByRole('button', { name: /Filter/ }));
     await userEvent.click(await screen.findByText('Diet'));
@@ -126,7 +138,7 @@ describe('FilterBar', () => {
           { kind: 'field', key: 'org', op: '$eq', value: 'extern' },
         ]}
         statuses={STATUSES}
-        pinnedFields={[]}
+        filterableFields={[]}
         onChange={onChange}
       />,
     );

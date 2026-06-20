@@ -7,11 +7,11 @@ import { FilterChip } from './filter-chip.tsx';
 interface Props {
   clauses: FilterClauseUrl[];
   statuses: Status[];
-  pinnedFields: Field[];
+  filterableFields: Field[];
   onChange: (next: FilterClauseUrl[]) => void;
 }
 
-export function FilterBar({ clauses, statuses, pinnedFields, onChange }: Props) {
+export function FilterBar({ clauses, statuses, filterableFields, onChange }: Props) {
   const labelOf = (c: FilterClauseUrl): string => {
     if (c.kind === 'status') {
       return c.values.map((v) => statuses.find((s) => s.key === v)?.name ?? v).join(', ');
@@ -59,7 +59,7 @@ export function FilterBar({ clauses, statuses, pinnedFields, onChange }: Props) 
       ))}
       <FilterAdd
         statuses={statuses}
-        pinnedFields={pinnedFields}
+        filterableFields={filterableFields}
         existing={clauses}
         onAdd={(c) => onChange([...clauses, c])}
       />

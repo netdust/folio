@@ -5,6 +5,7 @@ import {
   fieldFilterParam,
   fieldFilterValue,
   parseFilters,
+  useDocuments,
 } from '../../lib/api/documents.ts';
 import { type Field, useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
@@ -12,6 +13,7 @@ import { useStatuses } from '../../lib/api/statuses.ts';
 import { useActiveView } from '../../lib/api/use-active-view.ts';
 import { useUpdateView } from '../../lib/api/views.ts';
 import { FilterBar } from '../filter/filter-bar.tsx';
+import { filterableFields } from '../filter/filterable-fields.ts';
 import { BoardControls } from '../kanban/board-controls.tsx';
 import { ListControls } from './list-controls.tsx';
 import { useViewFilterHydration } from './use-view-filter-hydration.ts';
@@ -68,6 +70,16 @@ export function ViewControls({ wslug, pslug, tslug }: Props) {
   const { data: statuses } = useStatuses(wslug, pslug, tslug);
   const { data: fields } = useFields(wslug, pslug, tslug);
   const updateView = useUpdateView(wslug, pslug, tslug);
+
+  // A doc sample so the filter bar can offer ANY column the table shows — not
+  // just formally-pinned fields. Un-pinned frontmatter keys get a synthesized
+  // filterable field with its type inferred from the data (filterableFields).
+  // limit:100 is plenty to discover the table's column set; type:work_item
+  // scopes to this table's rows.
+  const { data: sample } = useDocuments(wslug, pslug, tslug, {
+    type: 'work_item',
+    limit: 100,
+  });
 
   const urlViewId = typeof search.view === 'string' ? search.view : undefined;
 
@@ -139,6 +151,8 @@ export function ViewControls({ wslug, pslug, tslug }: Props) {
   if (!activeView) return null;
 
   const allFields = fields ?? [];
+  // Pinned fields + inferred columns from the data → the full filterable set.
+  const filterFields = filterableFields(allFields, sample?.data ?? []);
 
   // INVARIANT 16: calendar/timeline field + zoom are VIEW config — every change
   // PATCHes the view's settings (merged over the saved settings so siblings are
@@ -155,7 +169,7 @@ export function ViewControls({ wslug, pslug, tslug }: Props) {
       <FilterBar
         clauses={clauses}
         statuses={statuses ?? []}
-        pinnedFields={allFields}
+        filterableFields={filterFields}
         onChange={onFilterChange}
       />
       {renderSettingsSlot()}
