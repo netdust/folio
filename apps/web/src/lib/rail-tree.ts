@@ -89,12 +89,31 @@ export function buildRailTree(input: RailTreeInput): NavItem[] {
         return Number(b.isDefault) - Number(a.isDefault);
       });
 
+      // Which view row to highlight.
+      //   1. An explicit `?view=<id>` in the URL matches that row exactly
+      //      (the unambiguous signal — needs only the pslug to match).
+      //   2. A fresh table landing has NO `?view=` param, yet the DEFAULT view
+      //      IS being shown — without a fallback no row was highlighted and you
+      //      couldn't tell which view you were on. So when on THIS table with no
+      //      explicit view, highlight the default (then first), mirroring
+      //      useActiveView. Table-scoped so other tables' defaults don't light up.
+      const onThisTable =
+        currentRoute.pslug === project.slug &&
+        currentRoute.tslug === table.slug &&
+        currentRoute.isWiki !== true;
+      const fallbackViewId =
+        onThisTable && currentRoute.viewId === undefined
+          ? (sortedViews.find((v) => v.isDefault)?.id ?? sortedViews[0]?.id)
+          : undefined;
+
       const viewNavItems: NavItem[] = sortedViews.map(
         (view, idx, arr): NavItem => ({
           id: `view:${table.id}:${view.id}`,
           label: view.name,
           lucideIcon: view.type === 'kanban' ? Columns3 : List,
-          active: currentRoute.viewId === view.id && currentRoute.pslug === project.slug,
+          active:
+            currentRoute.pslug === project.slug &&
+            (currentRoute.viewId === view.id || fallbackViewId === view.id),
           onClick: () => handlers.onViewClick(project.slug, table.slug, view.id, view.type),
           onRename: handlers.onRenameView
             ? (next) => handlers.onRenameView!(project.slug, table.slug, view.id, next)
