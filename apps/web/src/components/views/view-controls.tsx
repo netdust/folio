@@ -1,6 +1,11 @@
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
-import { type FilterClauseUrl, parseFilters } from '../../lib/api/documents.ts';
+import {
+  type FilterClauseUrl,
+  fieldFilterParam,
+  fieldFilterValue,
+  parseFilters,
+} from '../../lib/api/documents.ts';
 import { type Field, useFields } from '../../lib/api/fields.ts';
 import { formatApiError } from '../../lib/api/index.ts';
 import { useStatuses } from '../../lib/api/statuses.ts';
@@ -81,6 +86,11 @@ export function ViewControls({ wslug, pslug, tslug }: Props) {
     for (const k of ['status', 'priority', 'labels', 'assignee', 'updated_since']) {
       delete nextSearch[k];
     }
+    // Drop every stale generic field-filter param (f_<key>) before re-applying
+    // the current set — removing a field filter must clear its URL param.
+    for (const k of Object.keys(nextSearch)) {
+      if (k.startsWith('f_')) delete nextSearch[k];
+    }
     for (const c of next) {
       if (c.kind === 'status') {
         nextSearch.status = c.values;
@@ -101,6 +111,13 @@ export function ViewControls({ wslug, pslug, tslug }: Props) {
       if (c.kind === 'updated_since') {
         nextSearch.updated_since = c.value;
         flatFilters.updated_since = c.value;
+      }
+      if (c.kind === 'field') {
+        // URL: op-prefixed value under f_<key>. View persistence: the server AST
+        // shape on the bare key, so a saved view's filter round-trips through
+        // the same compiler the saved-view filters already use.
+        nextSearch[fieldFilterParam(c.key)] = fieldFilterValue(c.op, c.value);
+        flatFilters[c.key] = c.op === '$contains' ? { $contains: [c.value] } : { $eq: c.value };
       }
     }
     void navigate({ to: '.', search: nextSearch, replace: false });

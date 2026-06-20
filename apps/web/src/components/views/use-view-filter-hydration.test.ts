@@ -49,6 +49,34 @@ describe('useViewFilterHydration', () => {
     expect((arg.search as Record<string, unknown>).status).toBe('In Progress');
   });
 
+  it("hydrates a view's saved GENERIC field filter ($eq) into f_<key>", () => {
+    const navigate = vi.fn();
+    renderHook(() =>
+      useViewFilterHydration(
+        view({ filters: { role: { $eq: 'performer' } } }),
+        {},
+        navigate,
+        undefined,
+      ),
+    );
+    const [arg] = navigate.mock.calls[0];
+    expect((arg.search as Record<string, unknown>).f_role).toBe('eq:performer');
+  });
+
+  it("hydrates a view's saved GENERIC field filter ($contains) into f_<key>=has:", () => {
+    const navigate = vi.fn();
+    renderHook(() =>
+      useViewFilterHydration(
+        view({ filters: { diet_tags: { $contains: ['veggie'] } } }),
+        {},
+        navigate,
+        undefined,
+      ),
+    );
+    const [arg] = navigate.mock.calls[0];
+    expect((arg.search as Record<string, unknown>).f_diet_tags).toBe('has:veggie');
+  });
+
   it("honors a view's $in AST filter as an array", () => {
     const navigate = vi.fn();
     renderHook(() =>

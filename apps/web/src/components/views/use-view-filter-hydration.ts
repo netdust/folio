@@ -80,6 +80,33 @@ export function useViewFilterHydration(
       }
     }
 
+    // Generic field filters: any filter key that is NOT one of the built-in
+    // kinds is a custom-field clause (e.g. `{ role: { $eq: 'performer' } }`).
+    // Hydrate it into an `f_<key>` URL param with the op-prefixed value so
+    // parseFilters reconstructs the clause on reload (round-trip). A URL param
+    // already present (deep-link) wins, same as the built-ins.
+    for (const [key, raw] of Object.entries(viewFilters)) {
+      if ((FILTER_KEYS as readonly string[]).includes(key)) continue;
+      const param = `f_${key}`;
+      if (search[param] !== undefined && search[param] !== '') {
+        nextSearch[param] = search[param];
+        continue;
+      }
+      if (raw && typeof raw === 'object') {
+        const op = raw as Record<string, unknown>;
+        if ('$eq' in op && typeof op.$eq === 'string') nextSearch[param] = `eq:${op.$eq}`;
+        else if (
+          '$contains' in op &&
+          Array.isArray(op.$contains) &&
+          typeof op.$contains[0] === 'string'
+        ) {
+          nextSearch[param] = `has:${op.$contains[0]}`;
+        }
+      } else if (typeof raw === 'string' && raw) {
+        nextSearch[param] = `eq:${raw}`;
+      }
+    }
+
     // Sort: URL wins for the same reason.
     const urlSort = search.sort;
     if (typeof urlSort === 'string' && urlSort) {
