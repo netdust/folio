@@ -16,6 +16,7 @@ interface Props {
     key: string;
     type: FieldType;
     label: string;
+    options?: string[];
   }) => Promise<void> | void;
 }
 
@@ -92,6 +93,7 @@ export function ColumnPicker({
                         key: s.key,
                         type: s.inferredType,
                         label: titleize(s.key),
+                        ...(s.options ? { options: s.options } : {}),
                       })
                     }
                   >

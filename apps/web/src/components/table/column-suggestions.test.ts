@@ -56,6 +56,27 @@ describe('columnSuggestions', () => {
     expect(byKey('tags').inferredType).toBe('multi_select');
   });
 
+  it('derives multi_select options from the distinct array values across docs', () => {
+    // Regression: a multi_select suggestion with NO options 422s on pin
+    // (server requires non-empty options). The suggestion must carry the
+    // distinct member values so the pinned column is valid.
+    const docs = [
+      doc({ allergies: ['noten', 'koemelk'] }),
+      doc({ allergies: ['koemelk', 'schaaldieren'] }),
+      doc({ allergies: [] }),
+    ];
+    const out = columnSuggestions(docs, []);
+    const tags = out.find((s) => s.key === 'allergies') as ColumnSuggestion;
+    expect(tags.inferredType).toBe('multi_select');
+    expect(tags.options).toEqual(['koemelk', 'noten', 'schaaldieren']);
+  });
+
+  it('leaves options undefined for non-array (scalar) suggestions', () => {
+    const docs = [doc({ owner: 'Alice' }), doc({ price: 42 })];
+    const out = columnSuggestions(docs, []);
+    for (const s of out) expect(s.options).toBeUndefined();
+  });
+
   it('dedupes and sorts alphabetically', () => {
     const docs = [doc({ z: 1, a: 1 }), doc({ m: 1, a: 1 })];
     const out = columnSuggestions(docs, []);
